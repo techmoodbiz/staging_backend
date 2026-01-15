@@ -1,5 +1,6 @@
 
 import admin from 'firebase-admin';
+import { HfInference } from '@huggingface/inference';
 
 // Initialize Firebase Admin if needed
 if (!admin.apps.length) {
@@ -48,85 +49,166 @@ export default async function handler(req, res) {
 
   try {
     const { constructedPrompt, text } = req.body;
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) throw new Error('Missing API Key');
+    const errors = [];
 
-    const { GoogleGenerativeAI, SchemaType } = await import('@google/generative-ai');
-    const genAI = new GoogleGenerativeAI(apiKey);
+    // --- 1. GEMINI STREAM (Logic, Brand, Product) ---
+    const geminiPromise = (async () => {
+      try {
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) throw new Error('Missing Gemini API Key');
 
-    const auditResponseSchema = {
-      type: SchemaType.OBJECT,
-      properties: {
-        summary: { type: SchemaType.STRING },
-        identified_issues: {
-          type: SchemaType.ARRAY,
-          items: {
-            type: SchemaType.OBJECT,
-            properties: {
-              category: { type: SchemaType.STRING, description: "One of: language, ai_logic, brand, product" },
-              problematic_text: { type: SchemaType.STRING, description: "Full sentence containing error" },
-              citation: { type: SchemaType.STRING, description: "Exact Rule Label from Whitelist" },
-              reason: { type: SchemaType.STRING, description: "Explanation in Vietnamese" },
-              severity: { type: SchemaType.STRING, description: "High, Medium, Low" },
-              suggestion: { type: SchemaType.STRING, description: "Complete rewritten sentence in Vietnamese" }
-            },
-            required: ["category", "problematic_text", "reason", "suggestion", "citation", "severity"]
-          }
-        }
-      },
-      required: ["summary", "identified_issues"]
-    };
+        const { GoogleGenerativeAI, SchemaType } = await import('@google/generative-ai');
+        const genAI = new GoogleGenerativeAI(apiKey);
 
-    // STRICT SYSTEM INSTRUCTION (CLOSED WORLD ASSUMPTION)
-    const systemInstruction = `
-You are MOODBIZ SUPREME AUDITOR - An automated Quality Control AI.
+        const auditResponseSchema = {
+          type: SchemaType.OBJECT,
+          properties: {
+            summary: { type: SchemaType.STRING },
+            identified_issues: {
+              type: SchemaType.ARRAY,
+              items: {
+                type: SchemaType.OBJECT,
+                properties: {
+                  category: { type: SchemaType.STRING, description: "One of: ai_logic, brand, product" }, // Removed 'language'
+                  problematic_text: { type: SchemaType.STRING },
+                  citation: { type: SchemaType.STRING },
+                  reason: { type: SchemaType.STRING },
+                  severity: { type: SchemaType.STRING },
+                  suggestion: { type: SchemaType.STRING }
+                },
+                required: ["category", "problematic_text", "reason", "suggestion", "citation", "severity"]
+              }
+            }
+          },
+          required: ["summary", "identified_issues"]
+        };
 
-**CORE DIRECTIVE (CLOSED WORLD ASSUMPTION):**
-You are strictly forbidden from using "Common Sense", "General Knowledge", or "Best Practices".
-You may ONLY cite errors that explicitly violate the SOP Rules provided in the user prompt.
-If a sentence does not violate a specific provided SOP, it is CORRECT.
+        const systemInstruction = `
+You are MOODBIZ LOGIC AUDITOR.
+Your specific job is to check for LOGIC, BRAND CONSISTENCY, and PRODUCT ACCURACY.
+Do NOT check for spelling or grammar (another AI does that).
+
+**CORE DIRECTIVE:**
+1. Check 'ai_logic': Does the content make sense? Is it hallucinating?
+2. Check 'brand': Does it violate brand tone or forbidden words?
+3. Check 'product': Is the product info accurate based on provided context?
 
 **STRICT CITATION RULE:**
-The 'citation' field MUST BE one of the specific "Rule Labels" provided in the prompt whitelist.
-If you find an issue but cannot map it to a specific Rule Label in the whitelist, YOU MUST IGNORE IT. Do not report it.
+You MUST cite specific "Rule Labels" from the User Prompt whitelist.
+If a sentence is logically sound and fits the brand, it is CORRECT.
 
-**OUTPUT RULES:**
-1. Return valid JSON only.
-2. Use Vietnamese for 'reason', 'suggestion', and 'summary'.
-3. 'suggestion' must be a full, grammatically correct Vietnamese sentence.
-4. Categorize strictly based on the "Waterfall Priority" defined in the user prompt.
+**OUTPUT:**
+Return JSON. Vietnamese for reason/suggestion.
 `;
 
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-2.0-flash-exp', // Revert to 2.0-flash-exp for better JSON stability
-      systemInstruction: systemInstruction,
-      generationConfig: {
-        temperature: 0.1, // Near zero for deterministic results
-        topP: 0.95,
-        maxOutputTokens: 8192,
-        responseMimeType: 'application/json',
-        responseSchema: auditResponseSchema
-      },
-    });
+        const model = genAI.getGenerativeModel({
+          model: 'gemini-2.0-flash-exp',
+          systemInstruction: systemInstruction,
+          generationConfig: {
+            temperature: 0.1,
+            responseMimeType: 'application/json',
+            responseSchema: auditResponseSchema
+          },
+        });
 
-    const finalPrompt = constructedPrompt || `Audit this text:\n"""\n${text}\n"""`;
+        const finalPrompt = constructedPrompt || `Audit this text:\n"""\n${text}\n"""`;
+        const result = await model.generateContent(finalPrompt);
+        return robustJSONParse(result.response.text());
 
-    const result = await model.generateContent(finalPrompt);
-    const responseText = result.response.text();
-    let parsedResult = robustJSONParse(responseText);
+      } catch (e) {
+        console.error("Gemini Error:", e);
+        errors.push("Gemini Error: " + e.message);
+        return { summary: "Lỗi Logic Audit.", identified_issues: [] };
+      }
+    })();
 
-    if (!parsedResult) {
-      console.warn("Audit JSON parse failed, raw:", responseText);
-      parsedResult = {
-        summary: "Lỗi định dạng JSON từ AI. Vui lòng thử lại.",
-        identified_issues: [{ category: "ai_logic", severity: "Low", problematic_text: "System Error", citation: "System", reason: "Invalid JSON Output from AI", suggestion: "Thử lại." }]
-      };
+    // --- 2. HUGGING FACE STREAM (Language) ---
+    const hfPromise = (async () => {
+      try {
+        const hfToken = process.env.HF_ACCESS_TOKEN;
+        // If no token, we attempt without it (free tier), checking for rate limits or logic in test script
+
+        const hf = new HfInference(hfToken);
+
+        // Qwen2.5-72B-Instruct is excellent for this.
+        const modelName = "Qwen/Qwen2.5-Coder-32B-Instruct";
+
+        const systemInstruction = `
+You are MOODBIZ LANGUAGE AUDITOR.
+Your ONLY job is to check for SPELLING, GRAMMAR, and VIETNAMESE STYLISTICS.
+Do NOT check for brand rules or logic.
+
+**TASK:**
+Review the text below. Identify spelling mistakes, grammar errors, or awkward phrasing (Not 'Native Vietnamese').
+Return JSON format.
+
+**JSON SCHEMA:**
+{
+  "summary": "Brief comment on language quality (Vietnamese)",
+  "identified_issues": [
+    {
+       "category": "language",
+       "problematic_text": "text segment",
+       "citation": "Spelling/Grammar",
+       "reason": "Why is it wrong? (Vietnamese)",
+       "severity": "Low/Medium/High",
+       "suggestion": "Corrected text"
+    }
+  ]
+}
+`;
+
+        const userPrompt = `Text to check:\n"""\n${text}\n"""\n\nReturn strictly valid JSON.`;
+
+        const response = await hf.chatCompletion({
+          model: modelName,
+          messages: [
+            { role: "system", content: systemInstruction },
+            { role: "user", content: userPrompt }
+          ],
+          max_tokens: 4096,
+          temperature: 0.1
+        });
+
+        const content = response.choices[0].message.content;
+        // Clean markdown code blocks if present
+        const jsonStr = content.replace(/```json\n?|\n?```/g, '').trim();
+        return robustJSONParse(jsonStr);
+
+      } catch (e) {
+        console.error("Hugging Face Error:", e);
+        errors.push("HF Error: " + e.message);
+        return { summary: "Lỗi Language Audit.", identified_issues: [] };
+      }
+    })();
+
+    // --- MERGE RESULTS ---
+    const [geminiResult, hfResult] = await Promise.all([geminiPromise, hfPromise]);
+
+    const finalResult = {
+      summary: (geminiResult?.summary || "") + (hfResult?.identified_issues?.length ? ` | Note ngữ pháp: ${hfResult.summary}` : ""),
+      identified_issues: [
+        ...(geminiResult?.identified_issues || []),
+        ...(hfResult?.identified_issues || [])
+      ]
+    };
+
+    if (errors.length > 0) {
+      console.warn("Audit Partial Errors:", errors);
+      finalResult.identified_issues.push({
+        category: 'ai_logic',
+        severity: 'Low',
+        problematic_text: 'System Warning',
+        citation: 'System',
+        reason: `Một số module Audit gặp lỗi: ${errors.join(', ')}`,
+        suggestion: 'Vui lòng kiểm tra lại cấu hình.'
+      });
     }
 
-    return res.status(200).json({ success: true, result: parsedResult });
+    return res.status(200).json({ success: true, result: finalResult });
 
   } catch (error) {
-    console.error('Audit API Error:', error);
+    console.error('Audit API Critical Error:', error);
     return res.status(200).json({
       success: true,
       result: {
