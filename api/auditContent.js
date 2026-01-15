@@ -48,7 +48,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { constructedPrompt, text } = req.body;
+    const { constructedPrompt, text, language } = req.body;
     const errors = [];
 
     // --- 1. GEMINI STREAM (Logic, Brand, Product) ---
@@ -98,7 +98,7 @@ You MUST cite specific "Rule Labels" from the User Prompt whitelist.
 If a sentence is logically sound and fits the brand, it is CORRECT.
 
 **OUTPUT:**
-Return JSON. Vietnamese for reason/suggestion.
+Return JSON. Explanations in the target language (${language || 'Vietnamese'}).
 `;
 
         const model = genAI.getGenerativeModel({
@@ -132,25 +132,26 @@ Return JSON. Vietnamese for reason/suggestion.
 
         // Qwen2.5-72B-Instruct is excellent for this.
         const modelName = "Qwen/Qwen2.5-Coder-32B-Instruct";
+        const targetLang = language || 'Vietnamese';
 
         const systemInstruction = `
 You are MOODBIZ LANGUAGE AUDITOR.
-Your ONLY job is to check for SPELLING, GRAMMAR, and VIETNAMESE STYLISTICS.
+Your ONLY job is to check for SPELLING, GRAMMAR, and STYLISTICS in ${targetLang}.
 Do NOT check for brand rules or logic.
 
 **TASK:**
-Review the text below. Identify spelling mistakes, grammar errors, or awkward phrasing (Not 'Native Vietnamese').
+Review the text below. Identify spelling mistakes, grammar errors, or awkward phrasing (Not Native ${targetLang}).
 Return JSON format.
 
 **JSON SCHEMA:**
 {
-  "summary": "Brief comment on language quality (Vietnamese)",
+  "summary": "Brief comment on language quality (in ${targetLang})",
   "identified_issues": [
     {
        "category": "language",
        "problematic_text": "text segment",
        "citation": "Spelling/Grammar",
-       "reason": "Why is it wrong? (Vietnamese)",
+       "reason": "Why is it wrong? (in ${targetLang})",
        "severity": "Low/Medium/High",
        "suggestion": "Corrected text"
     }
