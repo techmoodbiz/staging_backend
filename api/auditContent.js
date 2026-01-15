@@ -51,80 +51,114 @@ export default async function handler(req, res) {
     const { constructedPrompt, text, language } = req.body;
     const errors = [];
 
-    // --- 1. DEEPSEEK STREAM (Logic, Brand, Product) ---
-    const deepseekPromise = (async () => {
+    // --- 1. LOGIC STREAM (DeepSeek with Gemini Fallback) ---
+    const logicPromise = (async () => {
+      let logicResult = null;
+      let usedModel = "DeepSeek";
+
+      // 1.1 TRY DEEPSEEK
       try {
-        const apiKey = process.env.DEEPSEEK_API_KEY;
-        // Fallback to Gemini if DeepSeek key is missing (Hybrid safety)
-        if (!apiKey) {
-          console.warn("⚠️ DeepSeek Key missing. Falling back to Gemini.");
-          // ... (Optional: Keep Gemini fallback logic here or just throw to failover)
-          throw new Error('Missing DeepSeek API Key');
-        }
+        const dkKey = process.env.DEEPSEEK_API_KEY;
+        if (!dkKey) throw new Error("Missing DeepSeek Key");
 
         const { OpenAI } = await import('openai');
-        const openai = new OpenAI({
-          baseURL: 'https://api.deepseek.com',
-          apiKey: apiKey
-        });
-
+        const openai = new OpenAI({ baseURL: 'https://api.deepseek.com', apiKey: dkKey });
         const targetLang = language || 'Vietnamese';
 
         const systemInstruction = `
-You are MOODBIZ LOGIC AUDITOR (Powered by DeepSeek-V3).
-Your job is to check for LOGIC, BRAND CONSISTENCY, and PRODUCT ACCURACY.
-Do NOT check for spelling or grammar.
+You are MOODBIZ LOGIC AUDITOR (DeepSeek-V3).
+Check for LOGIC, BRAND, and PRODUCT accuracy. Do NOT check spelling.
 
 **CORE DIRECTIVE:**
-1. Check 'ai_logic': Does the content make sense? Is it hallucinating?
-2. Check 'brand': Does it behave according to brand persona?
-3. Check 'product': Is technical info accurate?
+1. Check 'ai_logic': Hallucination? Logic flaw?
+2. Check 'brand': Wrong tone? Forbidden words?
+3. Check 'product': Wrong specs?
 
-**STRICT CITATION RULE:**
-You MUST cite specific "Rule Labels" from the User Prompt whitelist.
-If a sentence is logically sound and fits the brand, it is CORRECT.
-
-**OUTPUT FORMAT:**
-Return strictly valid JSON only. No markdown. No reasoning text outside JSON.
-Explanations (\`reason\`, \`suggestion\`) must be in ${targetLang}.
+**STRICT CITATION:** Cite exact "Rule Label" from whitelist.
+**OUTPUT:** Strictly valid JSON. Explanations in ${targetLang}.
 
 JSON Schema:
 {
-  "summary": "Detailed analysis summary in ${targetLang}",
+  "summary": "Analysis in ${targetLang}",
   "identified_issues": [
     {
        "category": "ai_logic" | "brand" | "product",
        "problematic_text": "...",
        "citation": "Exact Rule Label",
-       "reason": "Explanation in ${targetLang}",
+       "reason": "...",
        "severity": "High" | "Medium" | "Low",
-       "suggestion": "Rewritten sentence in ${targetLang}"
+       "suggestion": "..."
     }
   ]
 }
 `;
-
-        const finalPrompt = constructedPrompt || `Audit this text:\n"""\n${text}\n"""`;
-
         const response = await openai.chat.completions.create({
-          messages: [
-            { role: "system", content: systemInstruction },
-            { role: "user", content: finalPrompt }
-          ],
-          model: "deepseek-chat", // DeepSeek-V3
+          messages: [{ role: "system", content: systemInstruction }, { role: "user", content: constructedPrompt || text }],
+          model: "deepseek-chat",
           temperature: 0.1,
-          response_format: { type: "json_object" }, // Enforce JSON if model supports, else prompt does it
+          response_format: { type: "json_object" },
           max_tokens: 4096
         });
 
-        const content = response.choices[0].message.content;
-        return robustJSONParse(content);
+        logicResult = robustJSONParse(response.choices[0].message.content);
 
-      } catch (e) {
-        console.error("DeepSeek Error:", e);
-        errors.push("DeepSeek Error: " + e.message);
-        return { summary: "Lỗi Logic Audit (DeepSeek).", identified_issues: [] };
+      } catch (dkError) {
+        console.warn(`⚠️ DeepSeek Failed (${dkError.message}). Fallback to GEMINI.`);
+        usedModel = "Gemini";
+
+        // 1.2 FALLBACK TO GEMINI
+        try {
+          const gmKey = process.env.GEMINI_API_KEY;
+          if (!gmKey) throw new Error("Missing Gemini Key too!");
+
+          const { GoogleGenerativeAI, SchemaType } = await import('@google/generative-ai');
+          const genAI = new GoogleGenerativeAI(gmKey);
+
+          const auditResponseSchema = {
+            type: SchemaType.OBJECT,
+            properties: {
+              summary: { type: SchemaType.STRING },
+              identified_issues: {
+                type: SchemaType.ARRAY,
+                items: {
+                  type: SchemaType.OBJECT,
+                  properties: {
+                    category: { type: SchemaType.STRING, description: "ai_logic, brand, or product" },
+                    problematic_text: { type: SchemaType.STRING },
+                    citation: { type: SchemaType.STRING },
+                    reason: { type: SchemaType.STRING },
+                    severity: { type: SchemaType.STRING },
+                    suggestion: { type: SchemaType.STRING }
+                  },
+                  required: ["category", "problematic_text", "reason", "suggestion", "citation", "severity"]
+                }
+              }
+            },
+            required: ["summary", "identified_issues"]
+          };
+
+          const systemInstruction = `
+You are MOODBIZ LOGIC AUDITOR (Gemini Fallback).
+Check LOGIC, BRAND, PRODUCT. Do NOT check spelling.
+OUTPUT: JSON. Explanations in ${language || 'Vietnamese'}.
+`;
+          const model = genAI.getGenerativeModel({
+            model: 'gemini-2.0-flash-exp',
+            systemInstruction: systemInstruction,
+            generationConfig: { temperature: 0.1, responseMimeType: 'application/json', responseSchema: auditResponseSchema }
+          });
+
+          const result = await model.generateContent(constructedPrompt || text);
+          logicResult = robustJSONParse(result.response.text());
+
+        } catch (gmError) {
+          console.error("❌ Both DeepSeek AND Gemini Failed:", gmError);
+          errors.push(`Logic Audit Failed: ${gmError.message}`);
+          return { summary: "Lỗi hệ thống Logic Audit.", identified_issues: [] };
+        }
       }
+
+      return logicResult;
     })();
 
     // --- 2. HUGGING FACE STREAM (Language) ---
@@ -189,12 +223,12 @@ Return JSON format.
     })();
 
     // --- MERGE RESULTS ---
-    const [deepseekResult, hfResult] = await Promise.all([deepseekPromise, hfPromise]);
+    const [logicResult, hfResult] = await Promise.all([logicPromise, hfPromise]);
 
     const finalResult = {
-      summary: (deepseekResult?.summary || "") + (hfResult?.identified_issues?.length ? ` | Note ngữ pháp: ${hfResult.summary}` : ""),
+      summary: (logicResult?.summary || "") + (hfResult?.identified_issues?.length ? ` | Note ngữ pháp: ${hfResult.summary}` : ""),
       identified_issues: [
-        ...(deepseekResult?.identified_issues || []),
+        ...(logicResult?.identified_issues || []),
         ...(hfResult?.identified_issues || [])
       ]
     };
