@@ -14,34 +14,7 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 
-function semanticChunking(text, maxChunkSize = 1000, minChunkSize = 100) {
-    const cleanText = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    const rawParagraphs = cleanText.split(/\n\s*\n/);
-    const chunks = [];
-    let currentChunk = "";
-
-    for (const para of rawParagraphs) {
-        const cleanPara = para.trim();
-        if (!cleanPara) continue;
-        const potentialSize = currentChunk.length + cleanPara.length + 2;
-        if (potentialSize <= maxChunkSize) {
-            currentChunk += (currentChunk ? "\n\n" : "") + cleanPara;
-        } else {
-            if (currentChunk.length >= minChunkSize) { chunks.push(currentChunk); currentChunk = ""; }
-            if (cleanPara.length > maxChunkSize) {
-                const sentences = cleanPara.match(/[^.!?]+[.!?]+(\s+|$)/g) || [cleanPara];
-                let subChunk = "";
-                for (const sentence of sentences) {
-                    if (subChunk.length + sentence.length <= maxChunkSize) subChunk += sentence;
-                    else { if (subChunk) chunks.push(subChunk.trim()); subChunk = sentence; }
-                }
-                if (subChunk) currentChunk = subChunk.trim();
-            } else { currentChunk = cleanPara; }
-        }
-    }
-    if (currentChunk) chunks.push(currentChunk);
-    return chunks.filter(c => c.length > 20).map((c, index) => ({ text: c, start: index * 100, end: (index * 100) + c.length }));
-}
+import { semanticChunking } from '../../utils.js';
 
 export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Origin', '*');
