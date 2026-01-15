@@ -75,19 +75,19 @@ Check for LOGIC, BRAND, and PRODUCT accuracy. Do NOT check spelling.
 3. Check 'product': Wrong specs?
 
 **STRICT CITATION:** Cite exact "Rule Label" from whitelist.
-**OUTPUT:** Strictly valid JSON. Explanations in ${targetLang}.
+**OUTPUT:** Strictly valid JSON.
 
 JSON Schema:
 {
-  "summary": "Analysis in ${targetLang}",
+  "summary": "Analysis in Vietnamese",
   "identified_issues": [
     {
        "category": "ai_logic" | "brand" | "product",
        "problematic_text": "...",
        "citation": "Exact Rule Label",
-       "reason": "...",
+       "reason": "Explanation in Vietnamese",
        "severity": "High" | "Medium" | "Low",
-       "suggestion": "..."
+       "suggestion": "Rewritten sentence in ${targetLang}"
     }
   ]
 }
@@ -140,7 +140,9 @@ JSON Schema:
           const systemInstruction = `
 You are MOODBIZ LOGIC AUDITOR (Gemini Fallback).
 Check LOGIC, BRAND, PRODUCT. Do NOT check spelling.
-OUTPUT: JSON. Explanations in ${language || 'Vietnamese'}.
+OUTPUT: JSON.
+- Summary/Reason: Must be in Vietnamese.
+- Suggestion: Must be in ${language || 'Vietnamese'}.
 `;
           const model = genAI.getGenerativeModel({
             model: 'gemini-2.0-flash-exp',
@@ -184,15 +186,15 @@ Return JSON format.
 
 **JSON SCHEMA:**
 {
-  "summary": "Brief comment on language quality (in ${targetLang})",
+  "summary": "Brief comment on language quality (in Vietnamese)",
   "identified_issues": [
     {
        "category": "language",
        "problematic_text": "text segment",
        "citation": "Spelling/Grammar",
-       "reason": "Why is it wrong? (in ${targetLang})",
+       "reason": "Why is it wrong? (in Vietnamese)",
        "severity": "Low/Medium/High",
-       "suggestion": "Corrected text"
+       "suggestion": "Corrected text (in ${targetLang})"
     }
   ]
 }
