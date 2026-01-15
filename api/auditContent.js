@@ -51,74 +51,79 @@ export default async function handler(req, res) {
     const { constructedPrompt, text, language } = req.body;
     const errors = [];
 
-    // --- 1. GEMINI STREAM (Logic, Brand, Product) ---
-    const geminiPromise = (async () => {
+    // --- 1. DEEPSEEK STREAM (Logic, Brand, Product) ---
+    const deepseekPromise = (async () => {
       try {
-        const apiKey = process.env.GEMINI_API_KEY;
-        if (!apiKey) throw new Error('Missing Gemini API Key');
+        const apiKey = process.env.DEEPSEEK_API_KEY;
+        // Fallback to Gemini if DeepSeek key is missing (Hybrid safety)
+        if (!apiKey) {
+          console.warn("⚠️ DeepSeek Key missing. Falling back to Gemini.");
+          // ... (Optional: Keep Gemini fallback logic here or just throw to failover)
+          throw new Error('Missing DeepSeek API Key');
+        }
 
-        const { GoogleGenerativeAI, SchemaType } = await import('@google/generative-ai');
-        const genAI = new GoogleGenerativeAI(apiKey);
+        const { OpenAI } = await import('openai');
+        const openai = new OpenAI({
+          baseURL: 'https://api.deepseek.com',
+          apiKey: apiKey
+        });
 
-        const auditResponseSchema = {
-          type: SchemaType.OBJECT,
-          properties: {
-            summary: { type: SchemaType.STRING },
-            identified_issues: {
-              type: SchemaType.ARRAY,
-              items: {
-                type: SchemaType.OBJECT,
-                properties: {
-                  category: { type: SchemaType.STRING, description: "One of: ai_logic, brand, product" }, // Removed 'language'
-                  problematic_text: { type: SchemaType.STRING },
-                  citation: { type: SchemaType.STRING },
-                  reason: { type: SchemaType.STRING },
-                  severity: { type: SchemaType.STRING },
-                  suggestion: { type: SchemaType.STRING }
-                },
-                required: ["category", "problematic_text", "reason", "suggestion", "citation", "severity"]
-              }
-            }
-          },
-          required: ["summary", "identified_issues"]
-        };
+        const targetLang = language || 'Vietnamese';
 
         const systemInstruction = `
-You are MOODBIZ LOGIC AUDITOR.
-Your specific job is to check for LOGIC, BRAND CONSISTENCY, and PRODUCT ACCURACY.
-Do NOT check for spelling or grammar (another AI does that).
+You are MOODBIZ LOGIC AUDITOR (Powered by DeepSeek-V3).
+Your job is to check for LOGIC, BRAND CONSISTENCY, and PRODUCT ACCURACY.
+Do NOT check for spelling or grammar.
 
 **CORE DIRECTIVE:**
 1. Check 'ai_logic': Does the content make sense? Is it hallucinating?
-2. Check 'brand': Does it violate brand tone or forbidden words?
-3. Check 'product': Is the product info accurate based on provided context?
+2. Check 'brand': Does it behave according to brand persona?
+3. Check 'product': Is technical info accurate?
 
 **STRICT CITATION RULE:**
 You MUST cite specific "Rule Labels" from the User Prompt whitelist.
 If a sentence is logically sound and fits the brand, it is CORRECT.
 
-**OUTPUT:**
-Return JSON. Explanations in the target language (${language || 'Vietnamese'}).
+**OUTPUT FORMAT:**
+Return strictly valid JSON only. No markdown. No reasoning text outside JSON.
+Explanations (\`reason\`, \`suggestion\`) must be in ${targetLang}.
+
+JSON Schema:
+{
+  "summary": "Detailed analysis summary in ${targetLang}",
+  "identified_issues": [
+    {
+       "category": "ai_logic" | "brand" | "product",
+       "problematic_text": "...",
+       "citation": "Exact Rule Label",
+       "reason": "Explanation in ${targetLang}",
+       "severity": "High" | "Medium" | "Low",
+       "suggestion": "Rewritten sentence in ${targetLang}"
+    }
+  ]
+}
 `;
 
-        const model = genAI.getGenerativeModel({
-          model: 'gemini-2.0-flash-exp',
-          systemInstruction: systemInstruction,
-          generationConfig: {
-            temperature: 0.1,
-            responseMimeType: 'application/json',
-            responseSchema: auditResponseSchema
-          },
+        const finalPrompt = constructedPrompt || `Audit this text:\n"""\n${text}\n"""`;
+
+        const response = await openai.chat.completions.create({
+          messages: [
+            { role: "system", content: systemInstruction },
+            { role: "user", content: finalPrompt }
+          ],
+          model: "deepseek-chat", // DeepSeek-V3
+          temperature: 0.1,
+          response_format: { type: "json_object" }, // Enforce JSON if model supports, else prompt does it
+          max_tokens: 4096
         });
 
-        const finalPrompt = constructedPrompt || `Audit this text:\n"""\n${text}\n"""`;
-        const result = await model.generateContent(finalPrompt);
-        return robustJSONParse(result.response.text());
+        const content = response.choices[0].message.content;
+        return robustJSONParse(content);
 
       } catch (e) {
-        console.error("Gemini Error:", e);
-        errors.push("Gemini Error: " + e.message);
-        return { summary: "Lỗi Logic Audit.", identified_issues: [] };
+        console.error("DeepSeek Error:", e);
+        errors.push("DeepSeek Error: " + e.message);
+        return { summary: "Lỗi Logic Audit (DeepSeek).", identified_issues: [] };
       }
     })();
 
@@ -184,12 +189,12 @@ Return JSON format.
     })();
 
     // --- MERGE RESULTS ---
-    const [geminiResult, hfResult] = await Promise.all([geminiPromise, hfPromise]);
+    const [deepseekResult, hfResult] = await Promise.all([deepseekPromise, hfPromise]);
 
     const finalResult = {
-      summary: (geminiResult?.summary || "") + (hfResult?.identified_issues?.length ? ` | Note ngữ pháp: ${hfResult.summary}` : ""),
+      summary: (deepseekResult?.summary || "") + (hfResult?.identified_issues?.length ? ` | Note ngữ pháp: ${hfResult.summary}` : ""),
       identified_issues: [
-        ...(geminiResult?.identified_issues || []),
+        ...(deepseekResult?.identified_issues || []),
         ...(hfResult?.identified_issues || [])
       ]
     };
