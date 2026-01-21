@@ -73,8 +73,9 @@ Check for LOGIC, BRAND, and PRODUCT accuracy. Do NOT check spelling.
 1. Check 'ai_logic': Hallucination? Logic flaw?
 2. Check 'brand': Wrong tone? Forbidden words?
 3. Check 'product': Wrong specs?
+4. Check 'legal': Advertising Law violations?
 
-**STRICT CITATION:** Cite exact "Rule Label" from whitelist.
+**STRICT CITATION:** Cite exact "Rule Label" or "Implicit Label" from whitelist.
 **OUTPUT:** Strictly valid JSON.
 
 JSON Schema:
@@ -82,7 +83,7 @@ JSON Schema:
   "summary": "Analysis in Vietnamese",
   "identified_issues": [
     {
-       "category": "ai_logic" | "brand" | "product",
+       "category": "ai_logic" | "brand" | "product" | "legal",
        "problematic_text": "...",
        "citation": "Exact Rule Label",
        "reason": "Explanation in Vietnamese",
@@ -123,7 +124,7 @@ JSON Schema:
                 items: {
                   type: SchemaType.OBJECT,
                   properties: {
-                    category: { type: SchemaType.STRING, description: "ai_logic, brand, or product" },
+                    category: { type: SchemaType.STRING, description: "ai_logic, brand, product, or legal" },
                     problematic_text: { type: SchemaType.STRING },
                     citation: { type: SchemaType.STRING },
                     reason: { type: SchemaType.STRING },
@@ -139,7 +140,7 @@ JSON Schema:
 
           const systemInstruction = `
 You are MOODBIZ LOGIC AUDITOR (Gemini Fallback).
-Check LOGIC, BRAND, PRODUCT. Do NOT check spelling.
+Check LOGIC, BRAND, PRODUCT, LEGAL. Do NOT check spelling.
 OUTPUT: JSON.
 - Summary/Reason: Must be in Vietnamese.
 - Suggestion: Must be in ${language || 'Vietnamese'}.
