@@ -104,7 +104,7 @@ JSON Schema:
         });
 
         if (response.usage) {
-            totalTokensUsed += response.usage.total_tokens || 0;
+          totalTokensUsed += response.usage.total_tokens || 0;
         }
 
         logicResult = robustJSONParse(response.choices[0].message.content);
@@ -158,9 +158,9 @@ OUTPUT: JSON.
           });
 
           const result = await model.generateContent(constructedPrompt || text);
-          
-          if(result.response.usageMetadata) {
-              totalTokensUsed += result.response.usageMetadata.totalTokenCount || 0;
+
+          if (result.response.usageMetadata) {
+            totalTokensUsed += result.response.usageMetadata.totalTokenCount || 0;
           }
 
           logicResult = robustJSONParse(result.response.text());
@@ -177,22 +177,9 @@ OUTPUT: JSON.
 
     // --- 2. HUGGING FACE STREAM (Language) ---
     const hfPromise = (async () => {
-      try {
-        const hfToken = process.env.HF_ACCESS_TOKEN;
-        
-        // Use OpenAI client to connect to Hugging Face Router URL
-        const { OpenAI } = await import('openai');
-        
-        const hf = new OpenAI({
-            baseURL: "https://router.huggingface.co/hf-inference/v1",
-            apiKey: hfToken || "hf_public" // Ensure key exists (stored in Vercel)
-        });
+      const targetLang = language || 'Vietnamese';
 
-        // Use Qwen2.5-72B-Instruct -> High availability on HF Router & better for Language Audit
-        const modelName = "Qwen/Qwen2.5-72B-Instruct";
-        const targetLang = language || 'Vietnamese';
-
-        const systemInstruction = `
+      const systemInstruction = `
 You are MOODBIZ LANGUAGE AUDITOR.
 Your ONLY job is to check for SPELLING, GRAMMAR, and STYLISTICS in ${targetLang}.
 Do NOT check for brand rules or logic.
@@ -216,8 +203,20 @@ Return JSON format.
   ]
 }
 `;
+      const userPrompt = `Text to check:\n"""\n${text}\n"""\n\nReturn strictly valid JSON.`;
 
-        const userPrompt = `Text to check:\n"""\n${text}\n"""\n\nReturn strictly valid JSON.`;
+      try {
+        const hfToken = process.env.HF_ACCESS_TOKEN;
+
+        // FIX: Use STANDARD Hugging Face API Endpoint
+        const { OpenAI } = await import('openai');
+        const hf = new OpenAI({
+          baseURL: "https://api-inference.huggingface.co/v1/",
+          apiKey: hfToken || "hf_public"
+        });
+
+        // Use Qwen/Qwen2.5-72B-Instruct
+        const modelName = "Qwen/Qwen2.5-72B-Instruct";
 
         const response = await hf.chat.completions.create({
           model: modelName,
@@ -230,14 +229,13 @@ Return JSON format.
         });
 
         const content = response.choices[0].message.content;
-        // Clean markdown code blocks if present
         const jsonStr = content.replace(/```json\n?|\n?```/g, '').trim();
         return robustJSONParse(jsonStr);
 
       } catch (e) {
         console.error("Hugging Face Error:", e);
-        // Log more details to help debug 404s
         errors.push(`HF Error: ${e.message}`);
+        // No fallback as requested
         return { summary: "Lỗi Language Audit (HF).", identified_issues: [] };
       }
     })();
@@ -267,17 +265,17 @@ Return JSON format.
 
     // --- TRACK USAGE (ASYNC) ---
     if (totalTokensUsed > 0 && currentUser.uid) {
-        try {
-            await db.collection('users').doc(currentUser.uid).set({
-                usageStats: {
-                    totalTokens: admin.firestore.FieldValue.increment(totalTokensUsed),
-                    requestCount: admin.firestore.FieldValue.increment(1),
-                    lastActiveAt: admin.firestore.FieldValue.serverTimestamp()
-                }
-            }, { merge: true });
-        } catch (e) {
-            console.error("Failed to track audit usage:", e);
-        }
+      try {
+        await db.collection('users').doc(currentUser.uid).set({
+          usageStats: {
+            totalTokens: admin.firestore.FieldValue.increment(totalTokensUsed),
+            requestCount: admin.firestore.FieldValue.increment(1),
+            lastActiveAt: admin.firestore.FieldValue.serverTimestamp()
+          }
+        }, { merge: true });
+      } catch (e) {
+        console.error("Failed to track audit usage:", e);
+      }
     }
 
     return res.status(200).json({ success: true, result: finalResult });
