@@ -220,7 +220,7 @@ Return JSON format.
             { role: "system", content: systemInstruction },
             { role: "user", content: userPrompt }
           ],
-          max_tokens: 1024,
+          max_tokens: 4096,
           temperature: 0.1,
           response_format: { type: "json_object" }
         });
