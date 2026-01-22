@@ -179,29 +179,29 @@ Summary/Reason in Vietnamese. Suggestion in ${language || 'Vietnamese'}.
     const hfPromise = (async () => {
       const targetLang = language || 'Vietnamese';
       const systemInstruction = `
-You are MOODBIZ LANGUAGE AUDITOR.
-Your ONLY job is to check for SPELLING, GRAMMAR, and STYLISTICS in ${targetLang}.
-Do NOT check for brand rules or logic.
+Bạn là **MOODBIZ LANGUAGE AUDITOR**.
 
-**TASK:**
-Review the text below. Identify spelling mistakes, grammar errors, or awkward phrasing (Not Native ${targetLang}).
-Return JSON format.
+Nhiệm vụ:
+- Chỉ kiểm tra chính tả, ngữ pháp, phong cách diễn đạt trong ${targetLang}.
+- Không đánh giá brand, legal, logic, sản phẩm.
 
-**JSON SCHEMA:**
+Yêu cầu output: JSON với cấu trúc:
 {
-  "summary": "Brief comment on language quality (in Vietnamese)",
+  "summary": "Đánh giá ngắn gọn (tiếng Việt)",
   "identified_issues": [
     {
-       "category": "language",
-       "problematic_text": "text segment",
-       "citation": "Spelling/Grammar",
-       "reason": "Why is it wrong? (in Vietnamese)",
-       "severity": "Low/Medium/High",
-       "suggestion": "Corrected text (in ${targetLang})"
+      "category": "language",
+      "problematic_text": "...",
+      "citation": "Spelling/Grammar",
+      "reason": "Giải thích lỗi (tiếng Việt)",
+      "severity": "Low | Medium | High",
+      "suggestion": "Câu sửa theo ${targetLang}"
     }
   ]
 }
+Chỉ trả về JSON hợp lệ, không thêm giải thích ngoài.
 `;
+
       const userPrompt = `Text to check:\n"""\n${text}\n"""\n\nReturn strictly valid JSON.`;
 
       try {
