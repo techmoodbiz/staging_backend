@@ -86,8 +86,9 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: 'Unauthorized: Missing or invalid token' });
   }
   const token = authHeader.split('Bearer ')[1];
+  let currentUser;
   try {
-    await admin.auth().verifyIdToken(token);
+    currentUser = await admin.auth().verifyIdToken(token);
   } catch (error) {
     return res.status(401).json({ error: 'Unauthorized: Token verification failed' });
   }
@@ -174,10 +175,37 @@ Ngôn ngữ: ${language || "Vietnamese"}
     });
 
     const response = await model.generateContent(finalPrompt);
-
     const resultText = response.response.text();
-    console.log("Gemini Response Received. Length:", resultText?.length);
 
+    // --- TRACK USAGE ---
+    try {
+      const usage = response.response.usageMetadata;
+      if (usage && currentUser && currentUser.uid) {
+        const tokenCount = usage.totalTokenCount || 0;
+        await db.collection('users').doc(currentUser.uid).update({
+          'usageStats.totalTokens': admin.firestore.FieldValue.increment(tokenCount),
+          'usageStats.requestCount': admin.firestore.FieldValue.increment(1),
+          'usageStats.lastActiveAt': admin.firestore.FieldValue.serverTimestamp()
+        }).catch(err => {
+          // If usageStats object doesn't exist, create it via set merge or just log warning. 
+          // Firestore update with dot notation usually requires the parent map to exist or it creates it if doc exists.
+          // To be safe, we can use set with merge if strictly needed, but update is usually fine for existing fields.
+          // If it fails because field missing, we try set.
+          console.warn("Update usage failed, trying set...", err.message);
+          db.collection('users').doc(currentUser.uid).set({
+            usageStats: {
+              totalTokens: tokenCount,
+              requestCount: 1,
+              lastActiveAt: admin.firestore.FieldValue.serverTimestamp()
+            }
+          }, { merge: true });
+        });
+      }
+    } catch (e) {
+      console.error("Failed to track usage stats:", e);
+    }
+
+    console.log("Gemini Response Received. Length:", resultText?.length);
 
     res.status(200).json({
       success: true,

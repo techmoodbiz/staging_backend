@@ -17,6 +17,7 @@ if (!admin.apps.length) {
   }
 }
 
+const db = admin.firestore();
 import { robustJSONParse } from '../utils.js';
 
 export default async function handler(req, res) {
@@ -39,9 +40,10 @@ export default async function handler(req, res) {
   }
 
   const token = parts[1].trim();
+  let currentUser;
 
   try {
-    await admin.auth().verifyIdToken(token);
+    currentUser = await admin.auth().verifyIdToken(token);
   } catch (error) {
     console.error("Token verification failed:", error);
     return res.status(401).json({ error: 'Unauthorized: Invalid token' });
@@ -50,6 +52,7 @@ export default async function handler(req, res) {
   try {
     const { constructedPrompt, text, language } = req.body;
     const errors = [];
+    let totalTokensUsed = 0;
 
     // --- 1. LOGIC STREAM (DeepSeek with Gemini Fallback) ---
     const logicPromise = (async () => {
@@ -100,6 +103,10 @@ JSON Schema:
           response_format: { type: "json_object" },
           max_tokens: 4096
         });
+
+        if (response.usage) {
+          totalTokensUsed += response.usage.total_tokens || 0;
+        }
 
         logicResult = robustJSONParse(response.choices[0].message.content);
 
@@ -152,6 +159,11 @@ OUTPUT: JSON.
           });
 
           const result = await model.generateContent(constructedPrompt || text);
+
+          if (result.response.usageMetadata) {
+            totalTokensUsed += result.response.usageMetadata.totalTokenCount || 0;
+          }
+
           logicResult = robustJSONParse(result.response.text());
 
         } catch (gmError) {
@@ -213,6 +225,9 @@ Return JSON format.
           temperature: 0.1
         });
 
+        // HF Usage usually not returned in same format or free tier doesn't count against our billing in same way.
+        // If HF provides usage, add here. Currently skipping HF token count for billing logic.
+
         const content = response.choices[0].message.content;
         // Clean markdown code blocks if present
         const jsonStr = content.replace(/```json\n?|\n?```/g, '').trim();
@@ -246,6 +261,21 @@ Return JSON format.
         reason: `Một số module Audit gặp lỗi: ${errors.join(', ')}`,
         suggestion: 'Vui lòng kiểm tra lại cấu hình.'
       });
+    }
+
+    // --- TRACK USAGE (ASYNC) ---
+    if (totalTokensUsed > 0 && currentUser.uid) {
+      try {
+        await db.collection('users').doc(currentUser.uid).set({
+          usageStats: {
+            totalTokens: admin.firestore.FieldValue.increment(totalTokensUsed),
+            requestCount: admin.firestore.FieldValue.increment(1),
+            lastActiveAt: admin.firestore.FieldValue.serverTimestamp()
+          }
+        }, { merge: true });
+      } catch (e) {
+        console.error("Failed to track audit usage:", e);
+      }
     }
 
     return res.status(200).json({ success: true, result: finalResult });
