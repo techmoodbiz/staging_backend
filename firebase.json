@@ -23,7 +23,7 @@
     "rewrites": [
       {
         "source": "**",
-        "destination": "/MOODBIZ-Digital_Growth_Partner_System(RBAC).html"
+        "destination": "/index.html"
       }
     ]
   }
