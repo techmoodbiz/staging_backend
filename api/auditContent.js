@@ -208,8 +208,9 @@ Return JSON format.
         const hfToken = process.env.HF_ACCESS_TOKEN;
         const modelName = "Qwen/Qwen2.5-7B-Instruct";
 
-        const { HfInference } = await import('@huggingface/inference');
-        const hf = new HfInference(hfToken);
+        // 1) Đổi HfInference (deprecated, dùng api-inference) → InferenceClient (router mới)
+        const { InferenceClient } = await import('@huggingface/inference'); // [web:28][web:73]
+        const hf = new InferenceClient(hfToken); // mặc định dùng router.huggingface.co [web:69][web:81]
 
         const response = await hf.chatCompletion({
           model: modelName,
@@ -217,7 +218,7 @@ Return JSON format.
             { role: "system", content: systemInstruction },
             { role: "user", content: userPrompt }
           ],
-          max_tokens: 4096,
+          max_tokens: 1024,          // hợp lý hơn 4096 cho task audit ngôn ngữ [web:70]
           temperature: 0.1,
           response_format: { type: "json_object" }
         });
