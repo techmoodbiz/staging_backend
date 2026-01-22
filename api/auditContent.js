@@ -289,7 +289,7 @@ Return JSON format.
       success: true,
       result: finalResult,
       usage: {
-        totalTokens: totalTokensUsed
+        totalTokens: tokensLogic + tokensBrand + tokensLang
       }
     });
 
