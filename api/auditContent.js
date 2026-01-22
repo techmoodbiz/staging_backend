@@ -1,6 +1,5 @@
 
 import admin from 'firebase-admin';
-import { HfInference } from '@huggingface/inference';
 
 // Initialize Firebase Admin if needed
 if (!admin.apps.length) {
@@ -180,9 +179,15 @@ OUTPUT: JSON.
     const hfPromise = (async () => {
       try {
         const hfToken = process.env.HF_ACCESS_TOKEN;
-        // If no token, we attempt without it (free tier), checking for rate limits or logic in test script
 
-        const hf = new HfInference(hfToken);
+        // FIX: Use OpenAI client to connect to new Hugging Face Router URL
+        // Old URL (api-inference.huggingface.co) is deprecated/unstable for large models via hf-inference
+        const { OpenAI } = await import('openai');
+
+        const hf = new OpenAI({
+          baseURL: "https://router.huggingface.co/hf-inference/v1",
+          apiKey: hfToken || "hf_public" // Fallback mostly for public models, but usually requires key
+        });
 
         // Qwen2.5-72B-Instruct is excellent for this.
         const modelName = "Qwen/Qwen2.5-Coder-32B-Instruct";
@@ -215,7 +220,7 @@ Return JSON format.
 
         const userPrompt = `Text to check:\n"""\n${text}\n"""\n\nReturn strictly valid JSON.`;
 
-        const response = await hf.chatCompletion({
+        const response = await hf.chat.completions.create({
           model: modelName,
           messages: [
             { role: "system", content: systemInstruction },
@@ -225,9 +230,6 @@ Return JSON format.
           temperature: 0.1
         });
 
-        // HF Usage usually not returned in same format or free tier doesn't count against our billing in same way.
-        // If HF provides usage, add here. Currently skipping HF token count for billing logic.
-
         const content = response.choices[0].message.content;
         // Clean markdown code blocks if present
         const jsonStr = content.replace(/```json\n?|\n?```/g, '').trim();
@@ -236,7 +238,7 @@ Return JSON format.
       } catch (e) {
         console.error("Hugging Face Error:", e);
         errors.push("HF Error: " + e.message);
-        return { summary: "Lỗi Language Audit.", identified_issues: [] };
+        return { summary: "Lỗi Language Audit (HF).", identified_issues: [] };
       }
     })();
 
