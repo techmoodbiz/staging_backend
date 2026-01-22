@@ -1,5 +1,6 @@
 
 import admin from 'firebase-admin';
+import fetch from 'node-fetch';
 
 // Initialize Firebase Admin if needed
 if (!admin.apps.length) {
@@ -207,33 +208,65 @@ Return JSON format.
 
       try {
         const hfToken = process.env.HF_ACCESS_TOKEN;
-
-        // FIX: Use Native @huggingface/inference client instead of OpenAI wrapper
-        const { HfInference } = await import('@huggingface/inference');
-        const hf = new HfInference(hfToken);
-
-        // Using Qwen 2.5 7B Instruct - Reliable & Fast on HF Inference API
         const modelName = "Qwen/Qwen2.5-7B-Instruct";
 
-        const response = await hf.chatCompletion({
-          model: modelName,
-          messages: [
-            { role: "system", content: systemInstruction },
-            { role: "user", content: userPrompt }
-          ],
-          max_tokens: 4096,
-          temperature: 0.1
+        // FIX: Use manual Fetch to Router URL with Model ID in path (safest for new Router)
+        // Bypass library default endpoints which might be outdated
+        const response = await fetch(`https://router.huggingface.co/hf-inference/models/${modelName}/v1/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${hfToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: modelName,
+            messages: [
+              { role: "system", content: systemInstruction },
+              { role: "user", content: userPrompt }
+            ],
+            max_tokens: 4096,
+            temperature: 0.1,
+            response_format: { type: "json_object" }
+          })
         });
 
-        const content = response.choices[0].message.content;
+        if (!response.ok) {
+          const errText = await response.text();
+          throw new Error(`HF Router Status ${response.status}: ${errText}`);
+        }
+
+        const json = await response.json();
+        const content = json.choices[0].message.content;
         const jsonStr = content.replace(/```json\n?|\n?```/g, '').trim();
         return robustJSONParse(jsonStr);
 
       } catch (e) {
-        console.error("Hugging Face Error:", e);
-        errors.push(`HF Error: ${e.message}`);
-        // Return fallback structure
-        return { summary: "Lỗi Language Audit (HF).", identified_issues: [] };
+        console.warn("⚠️ Hugging Face Error (Swapping to Gemini):", e.message);
+        // errors.push(`HF Error: ${e.message}`); // Don't expose HF error if fallback works
+
+        // --- FALLBACK TO GEMINI (LANGUAGE) ---
+        try {
+          const gmKey = process.env.GEMINI_API_KEY;
+          if (!gmKey) throw new Error("No Gemini Key for fallback");
+
+          const { GoogleGenerativeAI } = await import('@google/generative-ai');
+          const genAI = new GoogleGenerativeAI(gmKey);
+          const model = genAI.getGenerativeModel({
+            model: 'gemini-2.0-flash-exp',
+            systemInstruction: systemInstruction, // Reuse same instruction
+            generationConfig: { responseMimeType: 'application/json' }
+          });
+
+          const result = await model.generateContent(userPrompt);
+          if (result.response.usageMetadata) {
+            totalTokensUsed += result.response.usageMetadata.totalTokenCount || 0;
+          }
+          return robustJSONParse(result.response.text());
+
+        } catch (geminiError) {
+          console.error("❌ Gemini Language Fallback Failed:", geminiError);
+          return { summary: "Lỗi Language Audit (System Busy).", identified_issues: [] };
+        }
       }
     })();
 
