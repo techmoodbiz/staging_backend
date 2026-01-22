@@ -208,13 +208,13 @@ Return JSON format.
         const hfToken = process.env.HF_ACCESS_TOKEN;
         const modelName = "Qwen/Qwen2.5-7B-Instruct";
 
-        const { HfInference } = await import('@huggingface/inference');
+        // 1) Import đúng InferenceClient từ @huggingface/inference
+        const { InferenceClient } = await import("@huggingface/inference"); // v2+ [web:28][web:93]
 
-        // Dùng HfInference, nhưng ép endpoint sang router mới
-        const hf = new HfInference(hfToken, {
-          // không set endpointUrl => SDK tự dùng router.huggingface.co/hf-inference [web:13][web:73]
-        });
+        // 2) KHÔNG truyền endpointUrl → mặc định dùng router.huggingface.co/hf-inference
+        const hf = new InferenceClient(hfToken);
 
+        // 3) Gọi chatCompletion qua router mới
         const response = await hf.chatCompletion({
           model: modelName,
           messages: [
@@ -223,43 +223,46 @@ Return JSON format.
           ],
           max_tokens: 1024,
           temperature: 0.1,
-          response_format: { type: "json_object" }
+          response_format: { type: "json_object" },
         });
 
         const content = response.choices[0].message.content;
-        const jsonStr = content.replace(/```json\n?|\n?```/g, '').trim();
+        const jsonStr = content.replace(/```json\n?|\n?```/g, "").trim();
         return robustJSONParse(jsonStr);
       } catch (e) {
-        // Giữ nguyên trạng thái lỗi, KHÔNG thay đổi flow
         let status = e.response?.status;
-        let statusText = e.response?.statusText || '';
-        let bodyText = '';
+        let statusText = e.response?.statusText || "";
+        let bodyText = "";
 
         if (e.response) {
           try {
             bodyText = await e.response.text();
           } catch (_) {
-            bodyText = '[Không đọc được body từ HF]';
+            bodyText = "[Không đọc được body từ HF]";
           }
         }
 
         console.error(
-          `HF Language Error: status=${status || 'Unknown'} ${statusText}`.trim()
+          `HF Language Error: status=${status || "Unknown"} ${statusText}`.trim()
         );
         console.error(`HF Language Error body: ${bodyText}`);
 
-        errors.push(`Language Error (HF ${status || 'Unknown'}): ${e.message}`);
+        errors.push(`Language Error (HF ${status || "Unknown"}): ${e.message}`);
 
         return {
           summary: "Lỗi hệ thống Language Audit (HF).",
-          identified_issues: [{
-            category: "language",
-            severity: "High",
-            problematic_text: "System Check",
-            citation: "API",
-            reason: `Kết nối HF thất bại (HTTP ${status || 'Unknown'}): ${bodyText || e.message}`,
-            suggestion: "Kiểm tra lại modelName, Inference Providers và quota HF."
-          }]
+          identified_issues: [
+            {
+              category: "language",
+              severity: "High",
+              problematic_text: "System Check",
+              citation: "API",
+              reason: `Kết nối HF thất bại (HTTP ${status || "Unknown"}): ${bodyText || e.message
+                }`,
+              suggestion:
+                "Kiểm tra lại modelName, Inference Providers và quota HF.",
+            },
+          ],
         };
       }
     })();
