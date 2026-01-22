@@ -22,7 +22,7 @@
     "lucide-react": "^0.471.0",
     "mammoth": "^1.9.0",
     "node-fetch": "^2.6.7",
-    "nodemailer": "^6.9.13",
+    "nodemailer": "^7.0.12",
     "openai": "^4.28.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
