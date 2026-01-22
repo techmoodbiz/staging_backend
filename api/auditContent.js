@@ -295,20 +295,28 @@ Return JSON format.
 
     // --- TRACK USAGE (ASYNC) ---
     if (totalTokensUsed > 0 && currentUser.uid) {
+      // Import dynamically to avoid top-level await issues if not supported, 
+      // but standard import at top is better. For now, since this is inside handler, dynamic is safe.
+      // actually, let's use standard import if we can, but we are inside a file that already has imports.
+      // We will add the import at the top of the file in a separate step or assume we can refactor.
+      // For this step, I'll use the imported function.
       try {
-        await db.collection('users').doc(currentUser.uid).set({
-          usageStats: {
-            totalTokens: admin.firestore.FieldValue.increment(totalTokensUsed),
-            requestCount: admin.firestore.FieldValue.increment(1),
-            lastActiveAt: admin.firestore.FieldValue.serverTimestamp()
-          }
-        }, { merge: true });
+        const { logTokenUsage } = await import('../tokenLogger.js');
+        await logTokenUsage(currentUser.uid, 'AUDIT_CONTENT', totalTokensUsed, {
+          status: finalResult.identified_issues.length > 0 ? 'issues_found' : 'clean'
+        });
       } catch (e) {
         console.error("Failed to track audit usage:", e);
       }
     }
 
-    return res.status(200).json({ success: true, result: finalResult });
+    return res.status(200).json({
+      success: true,
+      result: finalResult,
+      usage: {
+        totalTokens: totalTokensUsed
+      }
+    });
 
   } catch (error) {
     console.error('Audit API Critical Error:', error);

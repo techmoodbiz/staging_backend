@@ -49,6 +49,8 @@ export default async function handler(req, res) {
   } catch (error) {
     return res.status(401).json({ error: 'Unauthorized: Token verification failed' });
   }
+  const decodedToken = await admin.auth().verifyIdToken(token);
+  const uid = decodedToken.uid;
   // -------------------------
 
   try {
@@ -156,6 +158,7 @@ export default async function handler(req, res) {
     let finalContent = rawText;
 
     // 6. Gemini Cleaning & Structuring (CHỈ CHO MODE 'aggressive')
+    let usageData = { totalTokenCount: 0 };
     if (cleaningLevel === 'aggressive' && process.env.GEMINI_API_KEY) {
       try {
         const { GoogleGenerativeAI } = await import("@google/generative-ai");
@@ -198,6 +201,7 @@ ${rawText.substring(0, 40000)} // Giới hạn token
 
         if (responseText && responseText.length > 50) {
           finalContent = responseText;
+          if (result.response.usageMetadata) usageData = result.response.usageMetadata;
           console.log('✅ Gemini cleaning successful');
         }
       } catch (e) {
@@ -210,12 +214,38 @@ ${rawText.substring(0, 40000)} // Giới hạn token
       finalContent = `Title: ${metadata.title}\nDescription: ${metadata.description}\n\n${rawText}`;
     }
 
+    if (usageData?.totalTokenCount > 0 && uid) {
+      try {
+        const { logTokenUsage } = await import('../tokenLogger.js');
+        await logTokenUsage(uid, 'SCRAPE_WEBSITE', usageData.totalTokenCount, {
+          url: url,
+          cleaningLevel: cleaningLevel
+        });
+      } catch (e) { console.error("Log usage failed", e); }
+    }
+
+    // --- TRACK USAGE ---
+    const tokenCount = usageData?.totalTokenCount || 0;
+    if (tokenCount > 0) {
+      try {
+        // Extract User ID from verified token (need to pass or re-verify? We have auth middleware)
+        // We parsed token at start but didn't save uid to variable `currentUser` widely in this scope.
+        // We need to decode token properly to get uid.
+        // Wait, scrape.js didn't store uid in a variable in the original code?
+        // Checking original code: 
+        // const token = authHeader.split('Bearer ')[1];
+        // await admin.auth().verifyIdToken(token); -> result ignored?
+        // We should capture the result.
+      } catch (e) { }
+    }
+
     return res.status(200).json({
       success: true,
       text: finalContent,
       metadata: metadata,
       url: url,
-      cleaningLevel: cleaningLevel // Thông báo mode đã dùng
+      cleaningLevel: cleaningLevel, // Thông báo mode đã dùng
+      usage: usageData
     });
 
   } catch (error) {

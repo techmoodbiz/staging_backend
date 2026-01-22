@@ -38,8 +38,10 @@ export default async function handler(req, res) {
         return res.status(401).json({ error: 'Unauthorized: Missing or invalid token' });
     }
     const token = authHeader.split('Bearer ')[1];
+    let uid;
     try {
-        await admin.auth().verifyIdToken(token);
+        const decoded = await admin.auth().verifyIdToken(token);
+        uid = decoded.uid;
     } catch (error) {
         return res.status(401).json({ error: 'Unauthorized: Token verification failed' });
     }
@@ -151,7 +153,19 @@ ${contentContext}
 
         const brandGuideline = JSON.parse(aiResult.response.text());
 
-        return res.status(200).json({ success: true, data: brandGuideline });
+        const responseData = {
+            success: true,
+            data: brandGuideline,
+            usage: aiResult.response.usageMetadata || { totalTokenCount: 0 }
+        };
+
+        if (uid && responseData.usage.totalTokenCount > 0) {
+            import('../../tokenLogger.js').then(({ logTokenUsage }) => {
+                logTokenUsage(uid, 'ANALYZE_WEBSITE', responseData.usage.totalTokenCount, { url: websiteUrl });
+            });
+        }
+
+        return res.status(200).json(responseData);
 
     } catch (error) {
         console.error("Analyze Brand Error:", error);

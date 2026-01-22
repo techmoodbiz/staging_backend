@@ -75,8 +75,10 @@ export default async function handler(req, res) {
         return res.status(401).json({ error: 'Unauthorized: Missing or invalid token' });
     }
     const token = authHeader.split('Bearer ')[1];
+    let uid;
     try {
-        await admin.auth().verifyIdToken(token);
+        const decodedToken = await admin.auth().verifyIdToken(token);
+        uid = decodedToken.uid;
     } catch (error) {
         return res.status(401).json({ error: 'Unauthorized: Token verification failed' });
     }
@@ -99,6 +101,7 @@ export default async function handler(req, res) {
 
         let text = '';
         const fileName = (guideline.file_name || '').toLowerCase();
+        let usageData = { totalTokenCount: 0 };
 
         // --- VISUAL OCR USING GEMINI 2.0 FLASH ---
         const { GoogleGenerativeAI } = await import("@google/generative-ai");
@@ -122,6 +125,7 @@ export default async function handler(req, res) {
                 { text: "Extract ALL text from this document.\nRULES:\n1. Keep structure (Headers, Lists) as Markdown.\n2. Do NOT summarize. I need the full content.\n3. Represents tables as Markdown tables." }
             ]);
             text = response.response.text();
+            if (response.response.usageMetadata) usageData = response.response.usageMetadata;
 
         } else if (fileName.match(/\.(jpg|jpeg|png|webp)$/)) {
             console.log("Processing Image with Gemini Vision...");
@@ -142,6 +146,7 @@ export default async function handler(req, res) {
                 { text: "Transcribe the text in this image to Markdown." }
             ]);
             text = response.response.text();
+            if (response.response.usageMetadata) usageData = response.response.usageMetadata;
 
         } else if (fileName.endsWith('.docx') || fileName.endsWith('.doc')) {
             // Mammoth is good for Docx text
@@ -241,10 +246,17 @@ export default async function handler(req, res) {
             throw new Error(`Failed to finalize guideline: ${finalError.message}`);
         }
 
+        if (uid && usageData.totalTokenCount > 0) {
+            import('../../tokenLogger.js').then(({ logTokenUsage }) => {
+                logTokenUsage(uid, 'APPROVE_INGEST_FILE', usageData.totalTokenCount, { fileName });
+            });
+        }
+
         res.status(200).json({
             success: true,
             message: `Processed ${results.length} chunks (${successCount} with embeddings)`,
-            stats: { total: results.length, withEmbedding: successCount, withoutEmbedding: failCount }
+            stats: { total: results.length, withEmbedding: successCount, withoutEmbedding: failCount },
+            usage: usageData
         });
 
     } catch (e) {

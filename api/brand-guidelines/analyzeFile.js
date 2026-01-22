@@ -32,8 +32,9 @@ export default async function handler(req, res) {
         return res.status(401).json({ error: 'Unauthorized: Missing or invalid token' });
     }
     const token = authHeader.split('Bearer ')[1];
+    let currentUser;
     try {
-        await admin.auth().verifyIdToken(token);
+        currentUser = await admin.auth().verifyIdToken(token);
     } catch (error) {
         return res.status(401).json({ error: 'Unauthorized: Token verification failed' });
     }
@@ -86,8 +87,7 @@ INSTRUCTIONS:
                     }
                 });
                 const response = await model.generateContent(prompt);
-
-                return sendResponse(res, response);
+                return sendResponse(res, response, currentUser?.uid);
 
             } else {
                 const base64Data = fileBuffer.toString('base64');
@@ -108,7 +108,7 @@ INSTRUCTIONS:
                     { text: prompt }
                 ]);
 
-                return sendResponse(res, response);
+                return sendResponse(res, response, currentUser?.uid);
             }
 
         } catch (e) {
@@ -139,11 +139,23 @@ function getResponseSchema() {
     };
 }
 
-function sendResponse(res, aiResponse) {
+function sendResponse(res, aiResponse, userId) {
     try {
         const text = aiResponse.response.text();
         const json = JSON.parse(text);
-        return res.status(200).json({ success: true, data: json });
+
+        // Extract usage
+        const usage = aiResponse.response.usageMetadata || { totalTokenCount: 0 };
+
+        if (usage.totalTokenCount > 0 && userId) {
+            import('../../tokenLogger.js').then(({ logTokenUsage }) => {
+                logTokenUsage(userId, 'ANALYZE_FILE', usage.totalTokenCount, {
+                    status: 'success'
+                });
+            });
+        }
+
+        return res.status(200).json({ success: true, data: json, usage });
     } catch (e) {
         return res.status(500).json({ error: "Failed to parse AI response", details: e.message });
     }

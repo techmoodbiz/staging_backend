@@ -57,8 +57,10 @@ export default async function handler(req, res) {
         return res.status(401).json({ error: 'Unauthorized: Missing or invalid token' });
     }
     const token = authHeader.split('Bearer ')[1];
+    let uid;
     try {
-        await admin.auth().verifyIdToken(token);
+        const decodedToken = await admin.auth().verifyIdToken(token);
+        uid = decodedToken.uid;
     } catch (error) {
         return res.status(401).json({ error: 'Unauthorized: Token verification failed' });
     }
@@ -77,6 +79,7 @@ export default async function handler(req, res) {
 
         // --- INTELLIGENT CLEANING WITH GEMINI 3.0 ---
         let processedText = originalText;
+        let usageData = { totalTokenCount: 0 };
         if (originalText.length > 300) {
             console.log("Cleaning text with Gemini 3.0...");
             try {
@@ -101,6 +104,7 @@ ${originalText.substring(0, 50000)}
                 if (responseText && responseText.length > 50) {
                     processedText = responseText;
                 }
+                if (cleanResponse.response.usageMetadata) usageData = cleanResponse.response.usageMetadata;
             } catch (e) {
                 console.error("Cleaning failed", e);
                 // Fallback to original text if AI fails
@@ -152,7 +156,17 @@ ${originalText.substring(0, 50000)}
         });
 
         await batch.commit();
-        res.status(200).json({ success: true, message: `Processed ${chunks.length} chunks` });
+        if (uid && usageData.totalTokenCount > 0) {
+            import('../../tokenLogger.js').then(({ logTokenUsage }) => {
+                logTokenUsage(uid, 'APPROVE_INGEST_TEXT', usageData.totalTokenCount, { chars: processedText.length });
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: `Processed ${chunks.length} chunks`,
+            usage: usageData
+        });
 
     } catch (e) {
         console.error("Text Ingest Error:", e);
