@@ -208,18 +208,14 @@ Return JSON format.
       try {
         const hfToken = process.env.HF_ACCESS_TOKEN;
 
-        // FIX: Use ROUTER URL (api-inference is 410 Gone)
-        const { OpenAI } = await import('openai');
-        const hf = new OpenAI({
-          baseURL: "https://router.huggingface.co/hf-inference/v1/",
-          apiKey: hfToken || "hf_public"
-        });
+        // FIX: Use Native @huggingface/inference client instead of OpenAI wrapper
+        const { HfInference } = await import('@huggingface/inference');
+        const hf = new HfInference(hfToken);
 
-        // Use Qwen 7B (More stable on free tier than 72B)
-        // Alternative: "meta-llama/Llama-3.1-8B-Instruct"
+        // Using Qwen 2.5 7B Instruct - Reliable & Fast on HF Inference API
         const modelName = "Qwen/Qwen2.5-7B-Instruct";
 
-        const response = await hf.chat.completions.create({
+        const response = await hf.chatCompletion({
           model: modelName,
           messages: [
             { role: "system", content: systemInstruction },
@@ -236,7 +232,7 @@ Return JSON format.
       } catch (e) {
         console.error("Hugging Face Error:", e);
         errors.push(`HF Error: ${e.message}`);
-        // No fallback
+        // Return fallback structure
         return { summary: "Lỗi Language Audit (HF).", identified_issues: [] };
       }
     })();
