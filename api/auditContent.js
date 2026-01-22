@@ -105,7 +105,7 @@ JSON Schema:
         });
 
         if (response.usage) {
-            totalTokensUsed += response.usage.total_tokens || 0;
+          totalTokensUsed += response.usage.total_tokens || 0;
         }
 
         logicResult = robustJSONParse(response.choices[0].message.content);
@@ -159,9 +159,9 @@ OUTPUT: JSON.
           });
 
           const result = await model.generateContent(constructedPrompt || text);
-          
-          if(result.response.usageMetadata) {
-              totalTokensUsed += result.response.usageMetadata.totalTokenCount || 0;
+
+          if (result.response.usageMetadata) {
+            totalTokensUsed += result.response.usageMetadata.totalTokenCount || 0;
           }
 
           logicResult = robustJSONParse(result.response.text());
@@ -265,17 +265,17 @@ Return JSON format.
 
     // --- TRACK USAGE (ASYNC) ---
     if (totalTokensUsed > 0 && currentUser.uid) {
-        try {
-            await db.collection('users').doc(currentUser.uid).set({
-                usageStats: {
-                    totalTokens: admin.firestore.FieldValue.increment(totalTokensUsed),
-                    requestCount: admin.firestore.FieldValue.increment(1),
-                    lastActiveAt: admin.firestore.FieldValue.serverTimestamp()
-                }
-            }, { merge: true });
-        } catch (e) {
-            console.error("Failed to track audit usage:", e);
-        }
+      try {
+        await db.collection('users').doc(currentUser.uid).set({
+          usageStats: {
+            totalTokens: admin.firestore.FieldValue.increment(totalTokensUsed),
+            requestCount: admin.firestore.FieldValue.increment(1),
+            lastActiveAt: admin.firestore.FieldValue.serverTimestamp()
+          }
+        }, { merge: true });
+      } catch (e) {
+        console.error("Failed to track audit usage:", e);
+      }
     }
 
     return res.status(200).json({ success: true, result: finalResult });
