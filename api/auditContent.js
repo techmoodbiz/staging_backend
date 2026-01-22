@@ -178,9 +178,6 @@ Summary/Reason in Vietnamese. Suggestion in ${language || 'Vietnamese'}.
     // --- 3. LANGUAGE STREAM (Hugging Face / Qwen) ---
     const hfPromise = (async () => {
       const targetLang = language || 'Vietnamese';
-      // ... (Rest of HF Logic is same, just ensure it returns clean result)
-      // I will copy the existing HF logic here to ensure it fits the replacement block
-
       const systemInstruction = `
 You are MOODBIZ LANGUAGE AUDITOR.
 Your ONLY job is to check for SPELLING, GRAMMAR, and STYLISTICS in ${targetLang}.
@@ -210,26 +207,44 @@ Return JSON format.
       try {
         const hfToken = process.env.HF_ACCESS_TOKEN;
         const modelName = "Qwen/Qwen2.5-7B-Instruct";
-        const response = await fetch(`https://api-inference.huggingface.co/models/${modelName}/v1/chat/completions`, {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${hfToken}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: modelName,
-            messages: [{ role: "system", content: systemInstruction }, { role: "user", content: userPrompt }],
-            max_tokens: 4096, temperature: 0.1, response_format: { type: "json_object" }
-          })
+
+        const { HfInference } = await import('@huggingface/inference');
+        const hf = new HfInference(hfToken);
+
+        const response = await hf.chatCompletion({
+          model: modelName,
+          messages: [
+            { role: "system", content: systemInstruction },
+            { role: "user", content: userPrompt }
+          ],
+          max_tokens: 4096,
+          temperature: 0.1,
+          response_format: { type: "json_object" }
         });
 
-        if (!response.ok) throw new Error(`HF Status ${response.status}`);
-        const json = await response.json();
-        const content = json.choices[0].message.content;
+        const content = response.choices[0].message.content;
         const jsonStr = content.replace(/```json\n?|\n?```/g, '').trim();
         return robustJSONParse(jsonStr);
 
       } catch (e) {
-        console.warn("HF Language Error:", e.message);
-        // errors.push(`Language Error: ${e.message}`); // Optional to suppress
-        return { summary: "Language audit unavailable", identified_issues: [] };
+        console.error("HF Language Critical Error:", e.message);
+        if (e.response) {
+          console.error("HF Response status:", e.response.status);
+          console.error("HF Response data:", await e.response.json().catch(() => "No JSON"));
+        }
+        // User requested explicitly NO FALLBACK to debug
+        errors.push(`Language Error (HF ${e.response?.status || 'Unknown'}): ${e.message}`);
+        return {
+          summary: "Lỗi hệ thống Language Audit (HF).",
+          identified_issues: [{
+            category: "language",
+            severity: "High",
+            problematic_text: "System Check",
+            citation: "API",
+            reason: `Kết nối HF thất bại: ${e.message}`,
+            suggestion: "Kiểm tra trạng thái model Qwen."
+          }]
+        };
       }
     })();
 
