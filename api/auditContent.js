@@ -227,13 +227,26 @@ Return JSON format.
         return robustJSONParse(jsonStr);
 
       } catch (e) {
-        console.error("HF Language Critical Error:", e.message);
+        // Giữ nguyên trạng thái lỗi, KHÔNG thay đổi flow
+        let status = e.response?.status;
+        let statusText = e.response?.statusText || '';
+        let bodyText = '';
+
         if (e.response) {
-          console.error("HF Response status:", e.response.status);
-          console.error("HF Response data:", await e.response.json().catch(() => "No JSON"));
+          try {
+            bodyText = await e.response.text();
+          } catch (_) {
+            bodyText = '[Không đọc được body từ HF]';
+          }
         }
-        // User requested explicitly NO FALLBACK to debug
-        errors.push(`Language Error (HF ${e.response?.status || 'Unknown'}): ${e.message}`);
+
+        console.error(
+          `HF Language Error: status=${status || 'Unknown'} ${statusText}`.trim()
+        );
+        console.error(`HF Language Error body: ${bodyText}`);
+
+        errors.push(`Language Error (HF ${status || 'Unknown'}): ${e.message}`);
+
         return {
           summary: "Lỗi hệ thống Language Audit (HF).",
           identified_issues: [{
@@ -241,8 +254,8 @@ Return JSON format.
             severity: "High",
             problematic_text: "System Check",
             citation: "API",
-            reason: `Kết nối HF thất bại: ${e.message}`,
-            suggestion: "Kiểm tra trạng thái model Qwen."
+            reason: `Kết nối HF thất bại (HTTP ${status || 'Unknown'}): ${bodyText || e.message}`,
+            suggestion: "Kiểm tra lại modelName, Inference Providers và quota HF."
           }]
         };
       }
