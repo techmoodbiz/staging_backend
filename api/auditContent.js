@@ -104,7 +104,7 @@ JSON Schema:
         });
 
         if (response.usage) {
-          totalTokensUsed += response.usage.total_tokens || 0;
+            totalTokensUsed += response.usage.total_tokens || 0;
         }
 
         logicResult = robustJSONParse(response.choices[0].message.content);
@@ -158,9 +158,9 @@ OUTPUT: JSON.
           });
 
           const result = await model.generateContent(constructedPrompt || text);
-
-          if (result.response.usageMetadata) {
-            totalTokensUsed += result.response.usageMetadata.totalTokenCount || 0;
+          
+          if(result.response.usageMetadata) {
+              totalTokensUsed += result.response.usageMetadata.totalTokenCount || 0;
           }
 
           logicResult = robustJSONParse(result.response.text());
@@ -179,18 +179,17 @@ OUTPUT: JSON.
     const hfPromise = (async () => {
       try {
         const hfToken = process.env.HF_ACCESS_TOKEN;
-
-        // FIX: Use OpenAI client to connect to new Hugging Face Router URL
-        // Old URL (api-inference.huggingface.co) is deprecated/unstable for large models via hf-inference
+        
+        // Use OpenAI client to connect to Hugging Face Router URL
         const { OpenAI } = await import('openai');
-
+        
         const hf = new OpenAI({
-          baseURL: "https://router.huggingface.co/hf-inference/v1",
-          apiKey: hfToken || "hf_public" // Fallback mostly for public models, but usually requires key
+            baseURL: "https://router.huggingface.co/hf-inference/v1",
+            apiKey: hfToken || "hf_public" // Ensure key exists (stored in Vercel)
         });
 
-        // Qwen2.5-72B-Instruct is excellent for this.
-        const modelName = "Qwen/Qwen2.5-Coder-32B-Instruct";
+        // Use Qwen2.5-72B-Instruct -> High availability on HF Router & better for Language Audit
+        const modelName = "Qwen/Qwen2.5-72B-Instruct";
         const targetLang = language || 'Vietnamese';
 
         const systemInstruction = `
@@ -237,7 +236,8 @@ Return JSON format.
 
       } catch (e) {
         console.error("Hugging Face Error:", e);
-        errors.push("HF Error: " + e.message);
+        // Log more details to help debug 404s
+        errors.push(`HF Error: ${e.message}`);
         return { summary: "Lỗi Language Audit (HF).", identified_issues: [] };
       }
     })();
@@ -267,17 +267,17 @@ Return JSON format.
 
     // --- TRACK USAGE (ASYNC) ---
     if (totalTokensUsed > 0 && currentUser.uid) {
-      try {
-        await db.collection('users').doc(currentUser.uid).set({
-          usageStats: {
-            totalTokens: admin.firestore.FieldValue.increment(totalTokensUsed),
-            requestCount: admin.firestore.FieldValue.increment(1),
-            lastActiveAt: admin.firestore.FieldValue.serverTimestamp()
-          }
-        }, { merge: true });
-      } catch (e) {
-        console.error("Failed to track audit usage:", e);
-      }
+        try {
+            await db.collection('users').doc(currentUser.uid).set({
+                usageStats: {
+                    totalTokens: admin.firestore.FieldValue.increment(totalTokensUsed),
+                    requestCount: admin.firestore.FieldValue.increment(1),
+                    lastActiveAt: admin.firestore.FieldValue.serverTimestamp()
+                }
+            }, { merge: true });
+        } catch (e) {
+            console.error("Failed to track audit usage:", e);
+        }
     }
 
     return res.status(200).json({ success: true, result: finalResult });
