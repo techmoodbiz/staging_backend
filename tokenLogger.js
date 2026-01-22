@@ -27,14 +27,24 @@ export async function logTokenUsage(userId, action, tokenCount, metadata = {}) {
         });
 
         // 2. Update Aggregated Stats (Atomic Increment)
-        // using set with merge to ensure nested fields work even if document is partial
-        batch.set(userRef, {
-            usageStats: {
-                totalTokens: admin.firestore.FieldValue.increment(tokenCount),
-                requestCount: admin.firestore.FieldValue.increment(1),
-                lastActiveAt: admin.firestore.FieldValue.serverTimestamp()
-            }
-        }, { merge: true });
+        // Construct the update object dynamically
+        const updateData = {
+            'usageStats.totalTokens': admin.firestore.FieldValue.increment(tokenCount),
+            'usageStats.requestCount': admin.firestore.FieldValue.increment(1),
+            'usageStats.lastActiveAt': admin.firestore.FieldValue.serverTimestamp(),
+            [`usageStats.breakdown.${action}`]: admin.firestore.FieldValue.increment(tokenCount)
+        };
+
+        batch.update(userRef, updateData); // Use update to avoid overwriting unrelated fields if we were using set. 
+        // Actually, earlier I used set({ usageStats... }, {merge: true}). 
+        // update is cleaner for dot notation but requires document existence. 
+        // Given users must exist to have usage, update is safe. 
+        // If we want to be super safe, we keep set with merge but formats differ.
+        // Let's stick to set with merge for safety if we change schema later, 
+        // BUT dot notation for nested fields in `set` with `merge` behaves like update.
+
+        // Simplest robust way:
+        batch.set(userRef, updateData, { merge: true });
 
         await batch.commit();
         // console.log(`[TokenLogger] Logged ${tokenCount} tokens for ${action}`);
