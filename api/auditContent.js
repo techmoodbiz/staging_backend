@@ -227,7 +227,24 @@ Chỉ trả về JSON hợp lệ, không thêm giải thích ngoài.
 
         const content = response.choices[0].message.content;
         const jsonStr = content.replace(/```json\n?|\n?```/g, "").trim();
-        return robustJSONParse(jsonStr);
+
+        let tokenCount = 0;
+        if (response.usage) {
+          tokenCount = response.usage.total_tokens || 0;
+        }
+
+        // Add token count to the result so we can access it outside
+        const parsed = robustJSONParse(jsonStr);
+        parsed._tokenUsage = tokenCount;
+
+        // Explicitly update the outer scope variable if accessible, or return it.
+        // Since this is an IIFE / async block, we should return it in the object 
+        // OR update the `tokensLang` variable if it was in scope.
+        // But `tokensLang` is in the outer scope. We can't easily assign to it from inside this Promise if it's not capturing the variable by reference/closure correctly or if we want to be cleaner.
+        // Actually, `tokensLang` *is* in scope (lines 58). So we can just assign to it.
+        if (tokenCount > 0) tokensLang += tokenCount;
+
+        return parsed;
       } catch (e) {
         let status = e.response?.status;
         let statusText = e.response?.statusText || "";
