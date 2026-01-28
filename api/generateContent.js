@@ -162,11 +162,12 @@ Ngôn ngữ: ${language || "Vietnamese"}
 `;
     }
 
-    console.log("Calling Gemini 3.0 Flash...");
+    console.log("Calling Gemini 2.0 Flash...");
 
     // --- GENERATE CONTENT with correct API ---
+    // Fixed: Use gemini-2.0-flash-exp instead of gemini-1.5-flash to avoid 404
     const model = genAI.getGenerativeModel({
-      model: 'gemini-1.5-flash',
+      model: 'gemini-2.0-flash-exp',
       generationConfig: {
         temperature: 0.7,
         topP: 0.95,
