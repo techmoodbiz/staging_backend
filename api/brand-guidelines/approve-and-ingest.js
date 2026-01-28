@@ -113,7 +113,7 @@ export default async function handler(req, res) {
 
             // Send direct PDF buffer to Gemini (MIME type application/pdf)
             // Gemini 2.0 Flash is multimodal and can read PDFs natively
-            const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+            const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
             const response = await model.generateContent([
                 {
@@ -134,7 +134,7 @@ export default async function handler(req, res) {
             if (fileName.endsWith('jpg') || fileName.endsWith('jpeg')) mimeType = 'image/jpeg';
             if (fileName.endsWith('webp')) mimeType = 'image/webp';
 
-            const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+            const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
             const response = await model.generateContent([
                 {

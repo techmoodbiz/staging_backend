@@ -159,7 +159,7 @@ JSON Output Only.
 Summary/Reason in Vietnamese. Suggestion in ${language || 'Vietnamese'}.
 `;
         const model = genAI.getGenerativeModel({
-          model: 'gemini-2.0-flash-exp',
+          model: 'gemini-2.0-flash',
           systemInstruction: systemInstruction,
           generationConfig: { temperature: 0.1, responseMimeType: 'application/json', responseSchema: auditResponseSchema }
         });

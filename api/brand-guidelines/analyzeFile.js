@@ -80,7 +80,7 @@ INSTRUCTIONS:
                 prompt += `\n\nDOCUMENT CONTENT:\n${textContent.substring(0, 50000)}`;
 
                 const model = genAI.getGenerativeModel({
-                    model: 'gemini-2.0-flash-exp',
+                    model: 'gemini-2.0-flash',
                     generationConfig: {
                         responseMimeType: "application/json",
                         responseSchema: getResponseSchema()

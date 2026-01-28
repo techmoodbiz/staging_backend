@@ -187,7 +187,7 @@ ${rawText.substring(0, 40000)} // Giới hạn token
 `;
 
         const model = genAI.getGenerativeModel({
-          model: 'gemini-2.0-flash-exp',
+          model: 'gemini-2.0-flash',
           generationConfig: {
             temperature: 0.3, // Lower for more focused extraction
             topP: 0.8,
