@@ -166,7 +166,7 @@ Ngôn ngữ: ${language || "Vietnamese"}
 
     // --- GENERATE CONTENT with correct API ---
     const model = genAI.getGenerativeModel({
-      model: 'gemini-3-flash',
+      model: 'gemini-1.5-flash',
       generationConfig: {
         temperature: 0.7,
         topP: 0.95,
