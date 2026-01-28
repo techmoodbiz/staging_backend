@@ -216,7 +216,7 @@ Chỉ trả về JSON hợp lệ, không thêm giải thích ngoài.
 
       try {
         const hfToken = process.env.HF_ACCESS_TOKEN;
-        const modelName = "Qwen/Qwen2.5-Coder-32B-Instruct";
+        const modelName = "Qwen/Qwen2.5-7B-Instruct";
 
         // DÙNG LẠI HfInference ĐÚNG CÁCH
         const { HfInference } = await import("@huggingface/inference");
