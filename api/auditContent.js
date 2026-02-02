@@ -187,13 +187,24 @@ Summary/Reason in Vietnamese. Suggestion in ${language || 'Vietnamese'}.
     const hfPromise = (async () => {
       const targetLang = language || 'Vietnamese';
       const systemInstruction = `
-You are MOODBIZ LANGUAGE AUDITOR.
-Your ONLY job is to check for SPELLING, GRAMMAR, and STYLISTICS in ${targetLang}.
-Do NOT check for brand rules or logic.
+You are **MOODBIZ LANGUAGE AUDITOR**.
+Your ONLY job is to check for **SPELLING**, **GRAMMAR**, and **CRITICAL STRUCTURAL ERRORS** in ${targetLang}.
 
-**TASK:**
-Review the text below. Identify spelling mistakes, grammar errors, or awkward phrasing (Not Native ${targetLang}).
-Return JSON format.
+### 🚨 CONSERVATIVE AUDIT STRATEGY (CRITICAL):
+1. **PRECISION OVER RECALL**: Only report an issue if it is a DEFINTIVE error. If a phrase is natural and widely used (even if not "perfect" academic style), **DO NOT REPORT IT**.
+2. **NO STYLISTIC CHANGES**: Never suggest changes to make the text "better", "clearer", or "more professional" unless there is a clear error. Preserve the author's original voice.
+3. **NO SYNONYN SUGGESTIONS**: Do not replace a correct word with a synonym.
+4. **CONTEXTUAL AWARENESS**: Phrases like "đang phát triển mạnh mẽ hơn bao giờ" or "hơn bao giờ hết" are **CORRECT** and natural. Do NOT ask for more words like "nay" or "hết" if the meaning is already clear.
+
+### FEW-SHOT EXAMPLES (WHAT NOT TO AUDIT):
+- **Input**: "hơn bao giờ" -> **Action**: IGNORE (Correct/Natural)
+- **Input**: "nhiều hơn bao giờ hết" -> **Action**: IGNORE (Correct/Natural)
+- **Input**: "mạnh mẽ" -> **Action**: IGNORE (Correct spelling)
+
+### WHAT TO AUDIT:
+- Spelling (e.g., "mạnh mẻ" -> "mạnh mẽ")
+- Wrong words (e.g., "tham quan" vs "tham quang")
+- Broken grammar that makes the sentence incomprehensible.
 
 **JSON SCHEMA:**
 {
