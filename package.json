@@ -13,18 +13,21 @@
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
     "@huggingface/inference": "^4.13.10",
+    "@mozilla/readability": "^0.6.0",
     "busboy": "^1.6.0",
     "cheerio": "^1.0.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "firebase": "^11.2.0",
     "firebase-admin": "^13.0.2",
+    "jsdom": "^28.0.0",
     "lucide-react": "^0.471.0",
     "mammoth": "^1.9.0",
     "node-fetch": "^2.6.7",
     "nodemailer": "^7.0.12",
     "openai": "^4.28.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "turndown": "^7.2.2"
   }
 }

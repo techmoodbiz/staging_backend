@@ -1,6 +1,7 @@
-
 import fetch from 'node-fetch';
-import * as cheerio from 'cheerio';
+import { JSDOM } from 'jsdom';
+import { Readability } from '@mozilla/readability';
+import TurndownService from 'turndown';
 import https from 'https';
 import admin from 'firebase-admin';
 
@@ -44,19 +45,17 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: 'Unauthorized: Missing or invalid token' });
   }
   const token = authHeader.split('Bearer ')[1];
+  let uid;
   try {
-    await admin.auth().verifyIdToken(token);
+    const decodedToken = await admin.auth().verifyIdToken(token);
+    uid = decodedToken.uid;
   } catch (error) {
     return res.status(401).json({ error: 'Unauthorized: Token verification failed' });
   }
-  const decodedToken = await admin.auth().verifyIdToken(token);
-  const uid = decodedToken.uid;
   // -------------------------
 
   try {
     const { url, cleaningLevel = 'aggressive' } = req.body;
-    // cleaningLevel: 'aggressive' (default) - Dùng Gemini để clean kỹ cho brand guidelines
-    //                'minimal' - Chỉ xóa noise, giữ nguyên nội dung cho audit
 
     if (!url) return res.status(400).json({ error: 'URL is required' });
 
@@ -71,7 +70,7 @@ export default async function handler(req, res) {
         'Pragma': 'no-cache'
       },
       agent: url.startsWith('https') ? httpsAgent : null,
-      timeout: 20000 // Tăng timeout lên 20s
+      timeout: 25000 // Tăng timeout lên 25s
     });
 
     if (!response.ok) {
@@ -79,85 +78,213 @@ export default async function handler(req, res) {
     }
 
     const html = await response.text();
-    const $ = cheerio.load(html);
 
-    // 2. Extract Metadata (Thông tin quan trọng nhất)
-    const metadata = {
-      title: $('title').text().trim() || $('meta[property="og:title"]').attr('content') || '',
-      description: $('meta[name="description"]').attr('content') || $('meta[property="og:description"]').attr('content') || '',
-      keywords: $('meta[name="keywords"]').attr('content') || ''
+    // 2. Use JSDOM for robust content extraction and auditing
+    const dom = new JSDOM(html, { url });
+    const doc = dom.window.document;
+
+    // --- HTML STRUCTURE AUDIT ENGINE ---
+    const audit = {
+      score: 100,
+      categories: {
+        url: { score: 100, issues: [] },
+        metadata: { score: 100, issues: [] },
+        semantic: { score: 100, issues: [] },
+        headings: { score: 100, issues: [] },
+        links: { score: 100, issues: [] },
+        images: { score: 100, issues: [] },
+        schema: { score: 100, issues: [] }
+      },
+      recommendations: []
     };
 
-    // 3. Remove Clutter (Xóa rác kỹ hơn)
-    const tagsToRemove = [
-      'script', 'style', 'noscript', 'iframe', 'svg', 'video', 'audio', 'canvas', 'map', 'object',
-      'link', 'meta', // Đã lấy meta ở trên rồi
-      '[hidden]', '.hidden',
-      // Common noise classes/ids
-      '#header', '.header', 'header',
-      '#footer', '.footer', 'footer',
-      'nav', '.nav', '.navigation', '.menu', '#menu',
-      '.sidebar', '#sidebar', 'aside',
-      '.ads', '.advertisement', '.ad-banner',
-      '.cookie-banner', '#cookie-banner', '.gdpr',
-      '.social-share', '.share-buttons',
-      '.comments', '#comments', '.comment-section',
-      '.related-posts', '.recommended',
-      '.popup', '.modal',
-      '.login', '.signup', '.auth'
-    ];
-    $(tagsToRemove.join(', ')).remove();
+    // A. URL Audit
+    const urlObj = new URL(url);
+    if (urlObj.protocol !== 'https:') {
+      audit.categories.url.issues.push("URL should use HTTPS for security.");
+      audit.categories.url.score -= 40;
+    }
+    if (url.toLowerCase() !== url) {
+      audit.categories.url.issues.push("URL contains uppercase letters; lowercase is preferred for SEO.");
+      audit.categories.url.score -= 20;
+    }
+    if (urlObj.pathname.includes('_')) {
+      audit.categories.url.issues.push("URL uses underscores; hyphens are preferred separators.");
+      audit.categories.url.score -= 20;
+    }
+    const depth = urlObj.pathname.split('/').filter(Boolean).length;
+    if (depth > 4) {
+      audit.categories.url.issues.push(`URL depth is high (${depth}). Shallow structures are better for crawling.`);
+      audit.categories.url.score -= 10;
+    }
 
-    // 4. Smart Content Extraction Strategy
-    let $content = null;
+    // B. Metadata Audit
+    const metaTitle = doc.title;
+    const metaDesc = doc.querySelector('meta[name="description"]')?.content;
+    const metaLang = doc.documentElement.lang;
+    const metaViewport = doc.querySelector('meta[name="viewport"]');
+    const metaCharset = doc.querySelector('meta[charset]') || doc.querySelector('meta[content*="charset"]');
 
-    // Ưu tiên thẻ ngữ nghĩa chứa nội dung bài viết
-    const contentSelectors = [
-      'article',
-      '[role="main"]',
-      '.post-content',
-      '.entry-content',
-      '#content',
-      '.content',
-      '.article-body',
-      'main'
-    ];
+    if (!metaTitle) {
+      audit.categories.metadata.issues.push("Missing <title> tag.");
+      audit.categories.metadata.score -= 50;
+    } else if (metaTitle.length < 30 || metaTitle.length > 70) {
+      audit.categories.metadata.issues.push(`Title length (${metaTitle.length}) is not optimal (recommended: 30-70 chars).`);
+      audit.categories.metadata.score -= 10;
+    }
 
-    for (const selector of contentSelectors) {
-      if ($(selector).length > 0) {
-        $content = $(selector).first(); // Lấy phần tử đầu tiên khớp
-        break;
+    if (!metaDesc) {
+      audit.categories.metadata.issues.push("Missing meta description.");
+      audit.categories.metadata.score -= 40;
+    } else if (metaDesc.length < 120 || metaDesc.length > 160) {
+      audit.categories.metadata.issues.push(`Meta description length (${metaDesc.length}) is not optimal (recommended: 120-160 chars).`);
+      audit.categories.metadata.score -= 10;
+    }
+
+    if (!metaLang) {
+      audit.categories.metadata.issues.push("Missing 'lang' attribute on <html> tag.");
+      audit.categories.metadata.score -= 20;
+    }
+    if (!metaViewport) {
+      audit.categories.metadata.issues.push("Missing viewport meta tag for responsive design.");
+      audit.categories.metadata.score -= 30;
+    }
+    if (!metaCharset) {
+      audit.categories.metadata.issues.push("Missing character encoding (charset) meta tag.");
+      audit.categories.metadata.score -= 20;
+    }
+
+    // C. Semantic Audit
+    const semanticTags = ['header', 'nav', 'main', 'footer', 'article', 'aside'];
+    semanticTags.forEach(tag => {
+      if (doc.querySelector(tag)) {
+        // Found
+      } else if (['main', 'header', 'footer'].includes(tag)) {
+        audit.categories.semantic.issues.push(`Semantic tag <${tag}> is missing.`);
+        audit.categories.semantic.score -= 20;
       }
-    }
-
-    // Fallback: Nếu không tìm thấy main content, dùng body (đã được dọn dẹp)
-    if (!$content) {
-      $content = $('body');
-    }
-
-    // 5. Structure Preservation (Giữ cấu trúc xuống dòng)
-    // Thay thế các thẻ block bằng ký tự xuống dòng để text không bị dính chùm
-    $content.find('br').replaceWith('\n');
-    $content.find('p, div, h1, h2, h3, h4, h5, h6, li, tr').each((i, el) => {
-      $(el).after('\n');
     });
 
-    // Lấy text và làm sạch khoảng trắng thừa
-    let rawText = $content.text();
-    // Thay thế nhiều dòng trống liên tiếp bằng 1 dòng trống
-    rawText = rawText.replace(/\n\s*\n/g, '\n\n').trim();
-
-    if (rawText.length < 50) {
-      // Fallback: Nếu nội dung quá ngắn, thử lấy lại toàn bộ body text
-      rawText = $('body').text().replace(/\n\s*\n/g, '\n\n').trim();
-      if (rawText.length < 50) {
-        throw new Error("Nội dung trang web quá ngắn hoặc được render bằng JavaScript (SPA).");
-      }
+    // D. Heading Hierarchy Audit
+    const headers = Array.from(doc.querySelectorAll('h1, h2, h3, h4, h5, h6'));
+    const h1s = doc.querySelectorAll('h1');
+    if (h1s.length === 0) {
+      audit.categories.headings.issues.push("Missing H1 tag.");
+      audit.categories.headings.score -= 50;
+    } else if (h1s.length > 1) {
+      audit.categories.headings.issues.push(`Multiple H1 tags found (${h1s.length}). Only one H1 is recommended per page.`);
+      audit.categories.headings.score -= 30;
     }
 
-    let finalContent = rawText;
+    let prevLevel = 0;
+    headers.forEach(h => {
+      const level = parseInt(h.tagName[1]);
+      if (level > prevLevel + 1 && prevLevel !== 0) {
+        audit.categories.headings.issues.push(`Heading level skipped: ${h.tagName} follows H${prevLevel}.`);
+        audit.categories.headings.score -= 20;
+      }
+      prevLevel = level;
+    });
 
-    // 6. Gemini Cleaning & Structuring (CHỈ CHO MODE 'aggressive')
+    // E. Link Audit
+    const links = Array.from(doc.querySelectorAll('a'));
+    const internalLinks = links.filter(a => a.href.startsWith(urlObj.origin) || a.href.startsWith('/'));
+    const externalLinks = links.filter(a => !internalLinks.includes(a));
+    const emptyAnchors = links.filter(a => !a.textContent.trim() && !a.querySelector('img'));
+
+    if (emptyAnchors.length > 0) {
+      audit.categories.links.issues.push(`${emptyAnchors.length} links have empty anchor text.`);
+      audit.categories.links.score -= Math.min(30, emptyAnchors.length * 5);
+    }
+    if (links.length > 300) {
+      audit.categories.links.issues.push("Too many links on page (>300). May dilute link equity.");
+      audit.categories.links.score -= 10;
+    }
+
+    // F. Image Audit
+    const images = Array.from(doc.querySelectorAll('img'));
+    const missingAlt = images.filter(img => !img.hasAttribute('alt') || !img.alt.trim());
+    const notLazy = images.filter(img => img.offsetTop > 1000 && !img.hasAttribute('loading'));
+
+    if (missingAlt.length > 0) {
+      audit.categories.images.issues.push(`${missingAlt.length} images are missing alt text.`);
+      audit.categories.images.score -= Math.min(50, missingAlt.length * 10);
+    }
+    if (notLazy.length > 5) {
+      audit.categories.images.issues.push("Several below-the-fold images are missing 'loading=\"lazy\"'.");
+      audit.categories.images.score -= 10;
+    }
+
+    // G. Schema Audit
+    const jsonLd = doc.querySelectorAll('script[type="application/ld+json"]');
+    if (jsonLd.length === 0) {
+      audit.categories.schema.issues.push("No JSON-LD structured data detected.");
+      audit.categories.schema.score -= 40;
+    }
+
+    // Calculate Final Score (Weighted)
+    const weights = {
+      url: 0.1,
+      metadata: 0.2,
+      semantic: 0.15,
+      headings: 0.15,
+      links: 0.1,
+      images: 0.1,
+      schema: 0.2
+    };
+
+    audit.score = Math.round(
+      Object.keys(weights).reduce((acc, cat) => acc + (Math.max(0, audit.categories[cat].score) * weights[cat]), 0)
+    );
+
+    // Collect Recommendations
+    Object.values(audit.categories).forEach(cat => {
+      audit.recommendations.push(...cat.issues);
+    });
+
+    // Extract Basic Metadata for Response
+    const metadata = {
+      title: doc.title || '',
+      description: doc.querySelector('meta[name="description"]')?.content || doc.querySelector('meta[property="og:description"]')?.content || '',
+      keywords: doc.querySelector('meta[name="keywords"]')?.content || '',
+      author: doc.querySelector('meta[name="author"]')?.content || '',
+      ogImage: doc.querySelector('meta[property="og:image"]')?.content || '',
+      favicon: doc.querySelector('link[rel="icon"]')?.href || doc.querySelector('link[rel="shortcut icon"]')?.href || '',
+      lang: metaLang,
+      stats: {
+        links: links.length,
+        internalLinks: internalLinks.length,
+        externalLinks: externalLinks.length,
+        images: images.length,
+        schemaCount: jsonLd.length
+      }
+    };
+    // ------------------------------------
+
+    const reader = new Readability(doc);
+    const article = reader.parse();
+
+    if (!article || (!article.textContent && !article.content)) {
+      throw new Error("Unable to parse content from the provided URL. The page might be protected or use complex JavaScript rendering.");
+    }
+
+    // 3. Convert cleaned HTML to Markdown to preserve headers and structure
+    const turndownService = new TurndownService({
+      headingStyle: 'atx',
+      hr: '---',
+      bulletListMarker: '-',
+      codeBlockStyle: 'fenced'
+    });
+
+    // Remove unwanted elements from the article content if any remain
+    // Note: Readability already does a great job here.
+
+    let markdown = turndownService.turndown(article.content);
+
+    // Add Metadata header to markdown if not present in content
+    let finalContent = `# ${article.title || metadata.title}\n\n${markdown}`;
+
+    // 4. Gemini Cleaning & Structuring (CHỈ CHO MODE 'aggressive')
     let usageData = { totalTokenCount: 0 };
     if (cleaningLevel === 'aggressive' && process.env.GEMINI_API_KEY) {
       try {
@@ -165,33 +292,30 @@ export default async function handler(req, res) {
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
         const prompt = `
-Role: Web Content Extractor.
-Task: Reconstruct the main article from the raw scraped text below.
+Role: Web Content Auditor & Extractor.
+Task: Perfect the Markdown structure of the scraped article for a high-quality audit.
 
 Context Info:
-- Title: ${metadata.title}
+- Original Title: ${metadata.title}
 - Description: ${metadata.description}
 
 Instructions:
-1. Ignore navigation menus, footers, copyright, and irrelevant links.
-2. Focus on the main body content related to the Title.
-3. Preserve the original meaning and structure (headings, paragraphs).
-4. Output cleanly formatted text (Markdown is preferred).
-5. Remove duplicate content and redundant text.
-6. Keep only article/product description, technical details, and relevant information.
+1. Ensure the Markdown is clean and logically structured.
+2. PRESERVE all headers (H1, H2, H3), lists, and important links.
+3. Remove any remaining "noise" (e.g., social sharing text, navigation fragments, ads).
+4. Do NOT change the meaning or rewrite the facts; only optimize formatting and clarity.
+5. If there are tables or lists, ensure they are formatted correctly in Markdown.
 
-Raw Scraped Text:
+Raw Scraped Content (Markdown):
 """
-${rawText.substring(0, 40000)} // Giới hạn token
+${finalContent.substring(0, 35000)}
 """
 `;
 
         const model = genAI.getGenerativeModel({
           model: 'gemini-2.0-flash',
           generationConfig: {
-            temperature: 0.3, // Lower for more focused extraction
-            topP: 0.8,
-            topK: 20,
+            temperature: 0.1, // Very low temperature for high fidelity
             maxOutputTokens: 8000
           }
         });
@@ -202,18 +326,14 @@ ${rawText.substring(0, 40000)} // Giới hạn token
         if (responseText && responseText.length > 50) {
           finalContent = responseText;
           if (result.response.usageMetadata) usageData = result.response.usageMetadata;
-          console.log('✅ Gemini cleaning successful');
+          console.log('✅ Gemini structured cleaning successful');
         }
       } catch (e) {
-        console.warn("Gemini cleaning failed, using raw text:", e.message);
-        // Fallback: prepend metadata to raw text for context
-        finalContent = `Title: ${metadata.title}\nDescription: ${metadata.description}\n\n${rawText}`;
+        console.warn("Gemini cleaning failed, using Readability Markdown:", e.message);
       }
-    } else {
-      // Nếu không có AI, vẫn ghép metadata vào để kết quả tốt hơn
-      finalContent = `Title: ${metadata.title}\nDescription: ${metadata.description}\n\n${rawText}`;
     }
 
+    // Log Token Usage
     if (usageData?.totalTokenCount > 0 && uid) {
       try {
         const { logTokenUsage } = await import('../tokenLogger.js');
@@ -221,30 +341,18 @@ ${rawText.substring(0, 40000)} // Giới hạn token
           url: url,
           cleaningLevel: cleaningLevel
         });
-      } catch (e) { console.error("Log usage failed", e); }
-    }
-
-    // --- TRACK USAGE ---
-    const tokenCount = usageData?.totalTokenCount || 0;
-    if (tokenCount > 0) {
-      try {
-        // Extract User ID from verified token (need to pass or re-verify? We have auth middleware)
-        // We parsed token at start but didn't save uid to variable `currentUser` widely in this scope.
-        // We need to decode token properly to get uid.
-        // Wait, scrape.js didn't store uid in a variable in the original code?
-        // Checking original code: 
-        // const token = authHeader.split('Bearer ')[1];
-        // await admin.auth().verifyIdToken(token); -> result ignored?
-        // We should capture the result.
-      } catch (e) { }
+      } catch (e) {
+        console.error("Log usage failed", e);
+      }
     }
 
     return res.status(200).json({
       success: true,
       text: finalContent,
       metadata: metadata,
+      audit: audit, // Include the new audit results
       url: url,
-      cleaningLevel: cleaningLevel, // Thông báo mode đã dùng
+      cleaningLevel: cleaningLevel,
       usage: usageData
     });
 
