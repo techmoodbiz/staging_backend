@@ -205,7 +205,7 @@ LƯU Ý QUAN TRỌNG:
 
 Yêu cầu output: JSON với cấu trúc:
 {
-  "summary": "Đánh giá ngắn gọn (tiếng Việt)",
+  "summary": "Đánh giá ngắn gọn",
   "identified_issues": [
     {
       "category": "language",
@@ -239,7 +239,7 @@ Chỉ trả về JSON hợp lệ, không thêm giải thích ngoài.
             { role: "user", content: userPrompt }
           ],
           max_tokens: 4096,
-          temperature: 0.1,
+          temperature: 0.4,
           response_format: { type: "json_object" }
         });
 
