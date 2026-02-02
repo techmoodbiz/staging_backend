@@ -1,5 +1,5 @@
 import fetch from 'node-fetch';
-import { JSDOM } from 'jsdom';
+import { parseHTML } from 'linkedom';
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
 import https from 'https';
@@ -79,9 +79,9 @@ export default async function handler(req, res) {
 
     const html = await response.text();
 
-    // 2. Use JSDOM for robust content extraction and auditing
-    const dom = new JSDOM(html, { url });
-    const doc = dom.window.document;
+    // 2. Use linkedom for robust content extraction and auditing
+    const { document } = parseHTML(html);
+    const doc = document;
 
     // --- HTML STRUCTURE AUDIT ENGINE ---
     const audit = {
@@ -119,9 +119,9 @@ export default async function handler(req, res) {
     }
 
     // B. Metadata Audit
-    const metaTitle = doc.title;
-    const metaDesc = doc.querySelector('meta[name="description"]')?.content;
-    const metaLang = doc.documentElement.lang;
+    const metaTitle = doc.querySelector('title')?.textContent || "";
+    const metaDesc = doc.querySelector('meta[name="description"]')?.getAttribute('content') || doc.querySelector('meta[property="og:description"]')?.getAttribute('content');
+    const metaLang = doc.documentElement.getAttribute('lang');
     const metaViewport = doc.querySelector('meta[name="viewport"]');
     const metaCharset = doc.querySelector('meta[charset]') || doc.querySelector('meta[content*="charset"]');
 
@@ -244,12 +244,12 @@ export default async function handler(req, res) {
 
     // Extract Basic Metadata for Response
     const metadata = {
-      title: doc.title || '',
-      description: doc.querySelector('meta[name="description"]')?.content || doc.querySelector('meta[property="og:description"]')?.content || '',
-      keywords: doc.querySelector('meta[name="keywords"]')?.content || '',
-      author: doc.querySelector('meta[name="author"]')?.content || '',
-      ogImage: doc.querySelector('meta[property="og:image"]')?.content || '',
-      favicon: doc.querySelector('link[rel="icon"]')?.href || doc.querySelector('link[rel="shortcut icon"]')?.href || '',
+      title: doc.querySelector('title')?.textContent || '',
+      description: doc.querySelector('meta[name="description"]')?.getAttribute('content') || doc.querySelector('meta[property="og:description"]')?.getAttribute('content') || '',
+      keywords: doc.querySelector('meta[name="keywords"]')?.getAttribute('content') || '',
+      author: doc.querySelector('meta[name="author"]')?.getAttribute('content') || '',
+      ogImage: doc.querySelector('meta[property="og:image"]')?.getAttribute('content') || '',
+      favicon: doc.querySelector('link[rel="icon"]')?.getAttribute('href') || doc.querySelector('link[rel="shortcut icon"]')?.getAttribute('href') || '',
       lang: metaLang,
       stats: {
         links: links.length,
