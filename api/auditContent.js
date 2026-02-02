@@ -69,34 +69,33 @@ export default async function handler(req, res) {
         const openai = new OpenAI({ baseURL: 'https://api.deepseek.com', apiKey: dkKey });
 
         const systemInstruction = `
-You are MOODBIZ LOGIC & LEGAL AUDITOR (DeepSeek-V3).
+You are **MOODBIZ LOGIC & LEGAL AUDITOR**.
 
-### CORE DIRECTIVE:
-Your evaluation MUST BE strictly based on the **SOP MarkRules** and **LegalRules** provided in the prompt's Module 3 and Module 4 sections.
+### QUY TẮC CỐT LÕI (GROUNDING RULE):
+1. **CHỈ SỬ DỤNG SOP**: Mọi lỗi được báo cáo TUYỆT ĐỐI phải dựa trên các quy tắc trong **SOP MarkRules** (Module 3) và **LegalRules** (Module 4) được cung cấp trong prompt.
+2. **CẤM BỊA ĐẶT**: Không được sử dụng kiến thức luật pháp bên ngoài hoặc logic thông thường nếu quy tắc đó không có trong SOP. Nếu một đoạn văn trông có vẻ sai nhưng không vi phạm quy tắc cụ thể nào trong danh sách -> BÁO CÁO LÀ KHÔNG CÓ LỖI.
+3. **TRÍCH DẪN CHÍNH XÁC**: Trường "citation" phải ghi đúng TÊN (Label) của MarkRule hoặc LegalRule đã vi phạm.
 
-### EVALUATION LAYERS:
-1. **AI LOGIC** (from Module 3): Audit using the provided \`MarkRule\` entries. Focus on contradictions, hallucinations, and logic flaws defined in those rules.
-2. **LEGAL** (from Module 4): Audit using the provided \`LegalRule\` entries. Focus on Vietnamese Advertising Law and compliance standards defined specifically in those SOPs.
+### PHÂN LOẠI (CATEGORIZATION):
+- Sử dụng \`category: "ai_logic"\` cho các quy tắc thuộc Module 3.
+- Sử dụng \`category: "legal"\` cho các quy tắc thuộc Module 4.
+- Nếu một lỗi vi phạm cả hai, hãy ƯU TIÊN báo cáo là \`legal\`.
 
-### PRIORITY & DE-DUPLICATION:
-- **Legal Precedence**: If a statement violates both a Legal rule and an AI Logic rule, report it ONLY as a **LEGAL** violation.
-- **Single Issue per Segment**: Each unique text segment (\`problematic_text\`) should only be reported once in this stream. 
-- **Strict Categorization**: Use "ai_logic" for rules from Module 3 and "legal" for rules from Module 4.
-
-DO NOT audit for Brand Guideline or Product Accuracy (Handled by Gemini).
-DO NOT check Spelling/Grammar (Handled by Qwen).
+### LƯU Ý:
+- Không kiểm tra Brand Tone hay Sản phẩm.
+- Không kiểm tra Chính tả/Ngữ pháp.
 
 JSON Schema:
 {
-  "summary": "Logic/Legal Analysis in Vietnamese",
+  "summary": "Tóm tắt phân tích (Tiếng Việt)",
   "identified_issues": [
     {
        "category": "ai_logic" | "legal",
-       "problematic_text": "...",
-       "citation": "The exact Name of the MarkRule or LegalRule used",
-       "reason": "Detailed explanation in Vietnamese",
+       "problematic_text": "đoạn văn vi phạm",
+       "citation": "Tên chính xác của MarkRule hoặc LegalRule",
+       "reason": "Giải thích chi tiết lỗi dựa trên SOP (Tiếng Việt)",
        "severity": "High" | "Medium" | "Low",
-       "suggestion": "Fix suggestion in ${language || 'Vietnamese'}"
+       "suggestion": "Gợi ý sửa đổi (theo ${language || 'Vietnamese'})"
     }
   ]
 }
@@ -189,37 +188,29 @@ Summary/Reason in Vietnamese. Suggestion in ${language || 'Vietnamese'}.
     const hfPromise = (async () => {
       const targetLang = language || 'Vietnamese';
       const systemInstruction = `
-Bạn là **MOODBIZ LANGUAGE AUDITOR**.
+You are MOODBIZ LANGUAGE AUDITOR.
+Your ONLY job is to check for SPELLING, GRAMMAR, and STYLISTICS in ${targetLang}.
+Do NOT check for brand rules or logic.
 
-NHIỆM VỤ DUY NHẤT:
-- Chỉ kiểm tra và báo cáo các lỗi về **Chính tả (Spelling)**, **Ngữ pháp (Grammar)**, **Dấu câu (Punctuation)** và **Cách ngắt dòng/typography** trong ${targetLang}.
+**TASK:**
+Review the text below. Identify spelling mistakes, grammar errors, or awkward phrasing (Not Native ${targetLang}).
+Return JSON format.
 
-ĐIỀU CẤM KỴ TUYỆT ĐỐI:
-1. KHÔNG ĐƯỢC kiểm tra sự thật (Factual Accuracy). Kể cả nếu bạn biết thông tin đó sai (ví dụ: ngày tháng, năm ra mắt, thông số kỹ thuật), bạn cũng phải BỎ QUA.
-2. KHÔNG ĐƯỢC đánh giá Tone of Voice của thương hiệu hay phong cách nội dung.
-3. KHÔNG ĐƯỢC tự ý sửa đổi nội dung nếu không có lỗi về mặt cấu trúc ngôn ngữ.
-
-LƯU Ý QUAN TRỌNG: 
-- Nếu một đoạn văn có thông tin sai về ngày tháng/số liệu nhưng ĐÚNG chính tả, bạn phải báo cáo là "Không có lỗi".
-- Một lỗi "Năm ra mắt không chính xác" KHÔNG PHẢI là lỗi chính tả hay ngữ pháp. Đừng bao giờ báo cáo nó.
-
-Yêu cầu output: JSON với cấu trúc:
+**JSON SCHEMA:**
 {
-  "summary": "Đánh giá ngắn gọn",
+  "summary": "Brief comment on language quality (in Vietnamese)",
   "identified_issues": [
     {
-      "category": "language",
-      "problematic_text": "...",
-      "citation": "Spelling/Grammar",
-      "reason": "Giải thích lỗi (tiếng Việt)",
-      "severity": "Low | Medium | High",
-      "suggestion": "Câu sửa theo ${targetLang}"
+       "category": "language",
+       "problematic_text": "text segment",
+       "citation": "Spelling/Grammar",
+       "reason": "Why is it wrong? (in Vietnamese)",
+       "severity": "Low/Medium/High",
+       "suggestion": "Corrected text (in ${targetLang})"
     }
   ]
 }
-Chỉ trả về JSON hợp lệ, không thêm giải thích ngoài.
 `;
-
       const userPrompt = `Text to check:\n"""\n${text}\n"""\n\nReturn strictly valid JSON.`;
 
       try {
