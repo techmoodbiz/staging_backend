@@ -50,13 +50,16 @@ async function getTop5Links(keyword, language = 'vi') {
         const response = await fetch(jinaUrl, {
             headers: {
                 'Accept': 'application/json',
-                'X-With-Links-Summary': 'true'
-            }
+                'X-With-Links-Summary': 'true',
+                'X-No-Cache': 'true'
+            },
+            timeout: 10000
         });
+
+        console.log(`[Research] Jina AI Status: ${response.status}`);
 
         if (response.ok) {
             const data = await response.json();
-            // Jina Search returns a list of results in data.data
             if (data && data.data && data.data.length > 0) {
                 const links = data.data.slice(0, 5).map(item => ({
                     title: item.title,
@@ -64,37 +67,67 @@ async function getTop5Links(keyword, language = 'vi') {
                 }));
                 console.log(`[Research] Jina AI found ${links.length} links.`);
                 return links;
+            } else {
+                console.warn(`[Research] Jina AI returned empty data:`, JSON.stringify(data).substring(0, 200));
             }
+        } else {
+            const errorText = await response.text();
+            console.warn(`[Research] Jina AI Error Response: ${errorText.substring(0, 200)}`);
         }
     } catch (e) {
-        console.warn(`[Research] Jina AI Search failed:`, e.message);
+        console.warn(`[Research] Jina AI Error:`, e.message);
     }
 
-    // --- TIER 2: DuckDuckGo HTML Fallback ---
+    // --- TIER 2: DuckDuckGo Lite Fallback ---
     try {
-        console.log(`[Research] Tier 2: Falling back to DuckDuckGo HTML...`);
-        const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(keyword)}&kl=${language === 'vi' ? 'vn-vi' : 'us-en'}`;
+        // Using Lite version as it's often more stable for scraping than HTML version
+        console.log(`[Research] Tier 2: Falling back to DuckDuckGo Lite...`);
+        const ddgUrl = `https://duckduckgo.com/lite/?q=${encodeURIComponent(keyword)}&kl=${language === 'vi' ? 'vn-vi' : 'us-en'}`;
         const response = await fetch(ddgUrl, {
-            headers: { 'User-Agent': USER_AGENTS[0] },
+            headers: {
+                'User-Agent': USER_AGENTS[0],
+                'Accept': 'text/html'
+            },
             timeout: 10000
         });
+
+        console.log(`[Research] DDG Lite Status: ${response.status}`);
 
         if (response.ok) {
             const html = await response.text();
             const { document } = parseHTML(html);
-            const anchors = document.querySelectorAll('a.result__a');
+
+            // In Lite version, results are usually in <a> tags inside <td> or specific classes
+            const anchors = Array.from(document.querySelectorAll('a.result-link'));
+            console.log(`[Research] DDG Lite found ${anchors.length} potential anchors`);
+
             const links = [];
             for (const a of anchors) {
                 if (links.length >= 5) break;
                 let url = a.getAttribute('href');
-                if (url?.includes('uddg=')) {
-                    url = new URLSearchParams(url.split('?')[1]).get('uddg');
-                }
                 if (url && url.startsWith('http')) {
                     links.push({ title: a.textContent.trim(), url });
                 }
             }
+
             if (links.length > 0) return links;
+
+            // Fallback for different DDG selectors
+            const allLinks = Array.from(document.querySelectorAll('a'));
+            for (const a of allLinks) {
+                if (links.length >= 5) break;
+                const url = a.getAttribute('href');
+                const title = a.textContent?.trim();
+                // DDG Lite results often have results indexed by numbers or follow a specific pattern
+                if (url && url.startsWith('http') && !url.includes('duckduckgo.com') && title.length > 10) {
+                    if (!links.some(l => l.url === url)) {
+                        links.push({ title, url });
+                    }
+                }
+            }
+
+            if (links.length > 0) return links;
+            console.warn(`[Research] DDG Lite returned no links. Title: "${document.title}"`);
         }
     } catch (e) {
         console.warn(`[Research] DuckDuckGo fallback failed:`, e.message);
