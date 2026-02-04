@@ -18,7 +18,9 @@ version: 1
 - Kiểm tra Tone of Voice (Ví dụ: Chuyên nghiệp, Gần gũi, Hài hước).
 - Kiểm tra Visual style match (mô tả hình ảnh).
 
-### 2. Product Specifications
+### 2. Product Specifications (CONDITIONAL)
+- **QUY TẮC**: CHỈ thực hiện audit sản phẩm nếu trong nội dung tham khảo có phần "Product Information" hoặc thông tin chi tiết về sản phẩm.
+- **NẾU KHÔNG CÓ THÔNG TIN SẢN PHẨM**: Tuyệt đối KHÔNG báo lỗi về thông số sản phẩm. Không tự bịa ra thông số hoặc yêu cầu bổ sung thông số nếu người dùng không cung cấp dữ liệu gốc.
 - Kiểm tra đặc tính sản phẩm so với thông tin gốc (Product Info).
 - Cảnh báo nếu AI tự bịa thêm thông số không có trong tài liệu.
 
