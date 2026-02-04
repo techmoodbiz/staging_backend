@@ -154,7 +154,8 @@ JSON Schema:
         };
 
         const skillContent = await loadSkill('audit-brand-product');
-        const hasProductInfo = (constructedPrompt || "").includes("Product Information") || (constructedPrompt || "").includes("Thông tin sản phẩm");
+        const promptString = constructedPrompt || "";
+        const hasProductData = (promptString.includes("Product Information") || promptString.includes("Thông tin sản phẩm")) && !promptString.includes("Chung (Toàn thương hiệu)");
 
         const systemInstruction = `
 You are ** MOODBIZ BRAND & PRODUCT AUDITOR ** (Agent Skill).
@@ -163,7 +164,7 @@ Base your auditing on the following skill definition:
 ${skillContent}
 
 ### CURRENT CONTEXT:
-- PRODUCT_AUDIT_ENABLED: ${hasProductInfo ? "YES" : "NO"}
+- PRODUCT_AUDIT_ENABLED: ${hasProductData ? "YES" : "NO"}
 - If PRODUCT_AUDIT_ENABLED is NO, skip all product specification checks and focus ONLY on Brand Tone & Style.
 
 JSON Output Only.
