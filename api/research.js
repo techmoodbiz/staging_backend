@@ -38,25 +38,61 @@ const USER_AGENTS = [
 ];
 
 /**
- * Tiered Search Extraction
+ * Official Search Extraction (Google Custom Search API)
  */
 async function getTop5Links(keyword, language = 'vi') {
-    console.log(`[Research] Starting tiered search for: "${keyword}"`);
+    console.log(`[Research] Starting Official API search for: "${keyword}"`);
 
-    // --- TIER 1: Jina AI Search ---
+    const API_KEY = process.env.GOOGLE_SEARCH_API_KEY;
+    const CX = process.env.GOOGLE_SEARCH_CX;
+
+    // --- TIER 0: Google Custom Search API ---
+    if (API_KEY && CX) {
+        try {
+            console.log(`[Research] Tier 0: Using Google Custom Search API...`);
+            const googleUrl = `https://www.googleapis.com/customsearch/v1?key=${API_KEY}&cx=${CX}&q=${encodeURIComponent(keyword)}&hl=${language}&num=5`;
+
+            const response = await fetch(googleUrl, { timeout: 10000 });
+            const data = await response.json();
+
+            if (response.ok && data.items && data.items.length > 0) {
+                const links = data.items.map(item => ({
+                    title: item.title,
+                    url: item.link
+                }));
+                console.log(`[Research] Google API found ${links.length} links.`);
+                return links;
+            } else if (data.error) {
+                console.warn(`[Research] Google API returned error: ${data.error.message}`);
+            }
+        } catch (e) {
+            console.warn(`[Research] Google Custom Search API failed:`, e.message);
+        }
+    } else {
+        console.warn(`[Research] Google Custom Search API credentials missing (GOOGLE_SEARCH_API_KEY or GOOGLE_SEARCH_CX).`);
+    }
+
+    // --- TIER 1: Jina AI Search Fallback ---
     try {
-        console.log(`[Research] Tier 1: Trying Jina AI Search...`);
+        console.log(`[Research] Tier 1: Falling back to Jina AI Search...`);
         const jinaUrl = `https://s.jina.ai/${encodeURIComponent(keyword)}`;
-        const response = await fetch(jinaUrl, {
-            headers: {
-                'Accept': 'application/json',
-                'X-With-Links-Summary': 'true',
-                'X-No-Cache': 'true'
-            },
-            timeout: 10000
-        });
 
-        console.log(`[Research] Jina AI Status: ${response.status}`);
+        // Diagnostic: Check if JINA_API_KEY is present
+        const jinaKey = process.env.JINA_API_KEY;
+        console.log(`[Research] Jina API Key status: ${jinaKey ? 'Present (ending in ' + jinaKey.slice(-4) + ')' : 'MISSING'}`);
+
+        const headers = {
+            'Accept': 'application/json',
+            'X-With-Links-Summary': 'true',
+            'X-No-Cache': 'true'
+        };
+
+        if (jinaKey) {
+            headers['Authorization'] = `Bearer ${jinaKey.trim()}`;
+        }
+
+        const response = await fetch(jinaUrl, { headers, timeout: 10000 });
+        console.log(`[Research] Jina AI Search Status: ${response.status}`);
 
         if (response.ok) {
             const data = await response.json();
@@ -67,40 +103,28 @@ async function getTop5Links(keyword, language = 'vi') {
                 }));
                 console.log(`[Research] Jina AI found ${links.length} links.`);
                 return links;
-            } else {
-                console.warn(`[Research] Jina AI returned empty data:`, JSON.stringify(data).substring(0, 200));
             }
         } else {
             const errorText = await response.text();
-            console.warn(`[Research] Jina AI Error Response: ${errorText.substring(0, 200)}`);
+            console.error(`[Research] Jina AI Search Error (${response.status}): ${errorText.substring(0, 300)}`);
         }
     } catch (e) {
-        console.warn(`[Research] Jina AI Error:`, e.message);
+        console.warn(`[Research] Jina AI Search failed:`, e.message);
     }
 
     // --- TIER 2: DuckDuckGo Lite Fallback ---
     try {
-        // Using Lite version as it's often more stable for scraping than HTML version
         console.log(`[Research] Tier 2: Falling back to DuckDuckGo Lite...`);
         const ddgUrl = `https://duckduckgo.com/lite/?q=${encodeURIComponent(keyword)}&kl=${language === 'vi' ? 'vn-vi' : 'us-en'}`;
         const response = await fetch(ddgUrl, {
-            headers: {
-                'User-Agent': USER_AGENTS[0],
-                'Accept': 'text/html'
-            },
+            headers: { 'User-Agent': USER_AGENTS[0] },
             timeout: 10000
         });
-
-        console.log(`[Research] DDG Lite Status: ${response.status}`);
 
         if (response.ok) {
             const html = await response.text();
             const { document } = parseHTML(html);
-
-            // In Lite version, results are usually in <a> tags inside <td> or specific classes
             const anchors = Array.from(document.querySelectorAll('a.result-link'));
-            console.log(`[Research] DDG Lite found ${anchors.length} potential anchors`);
-
             const links = [];
             for (const a of anchors) {
                 if (links.length >= 5) break;
@@ -109,31 +133,13 @@ async function getTop5Links(keyword, language = 'vi') {
                     links.push({ title: a.textContent.trim(), url });
                 }
             }
-
             if (links.length > 0) return links;
-
-            // Fallback for different DDG selectors
-            const allLinks = Array.from(document.querySelectorAll('a'));
-            for (const a of allLinks) {
-                if (links.length >= 5) break;
-                const url = a.getAttribute('href');
-                const title = a.textContent?.trim();
-                // DDG Lite results often have results indexed by numbers or follow a specific pattern
-                if (url && url.startsWith('http') && !url.includes('duckduckgo.com') && title.length > 10) {
-                    if (!links.some(l => l.url === url)) {
-                        links.push({ title, url });
-                    }
-                }
-            }
-
-            if (links.length > 0) return links;
-            console.warn(`[Research] DDG Lite returned no links. Title: "${document.title}"`);
         }
     } catch (e) {
         console.warn(`[Research] DuckDuckGo fallback failed:`, e.message);
     }
 
-    throw new Error("Không tìm thấy kết quả tìm kiếm nào phù hợp.");
+    throw new Error("Không tìm thấy kết quả tìm kiếm nào phù hợp qua API hoặc các nguồn dự phòng.");
 }
 
 /**
@@ -142,13 +148,13 @@ async function getTop5Links(keyword, language = 'vi') {
 async function scrapeUrlTiered(url) {
     // --- TIER 1: Jina Reader ---
     try {
-        console.log(`[Research] Scraping ${url} via Jina Reader...`);
         const jinaReaderUrl = `https://r.jina.ai/${url}`;
-        const response = await fetch(jinaReaderUrl, {
-            headers: { 'X-Return-Format': 'markdown' },
-            timeout: 15000
-        });
+        const headers = { 'X-Return-Format': 'markdown' };
+        if (process.env.JINA_API_KEY) {
+            headers['Authorization'] = `Bearer ${process.env.JINA_API_KEY}`;
+        }
 
+        const response = await fetch(jinaReaderUrl, { headers, timeout: 15000 });
         if (response.ok) {
             const markdown = await response.text();
             if (markdown && markdown.length > 200) {
@@ -161,7 +167,6 @@ async function scrapeUrlTiered(url) {
 
     // --- TIER 2: Direct Fetch + Readability ---
     try {
-        console.log(`[Research] Scraping ${url} via Direct Fetch...`);
         const response = await fetch(url, {
             headers: { 'User-Agent': USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)] },
             agent: httpsAgent,
@@ -195,7 +200,6 @@ export default async function handler(req, res) {
     if (req.method === 'OPTIONS') return res.status(200).end();
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-    // Auth
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
     const token = authHeader.split('Bearer ')[1];
@@ -228,12 +232,12 @@ export default async function handler(req, res) {
         // --- STAGE 2: SEQUENTIAL SCRAPE ---
         const successfulScrapes = [];
         for (const link of links) {
+            console.log(`[Research] Staggered scrape for: ${link.url}`);
             const result = await scrapeUrlTiered(link.url);
             if (result) {
                 successfulScrapes.push({ ...result, title: link.title });
             }
-            // Delay 1.5s between requests to be gentle
-            await sleep(1500);
+            await sleep(1500); // 1.5s delay
         }
 
         if (successfulScrapes.length === 0) {
@@ -269,7 +273,6 @@ ${combinedContext.substring(0, 30000)}
 
         const result = await model.generateContent(prompt);
         const analysis = result.response.text();
-        const usage = result.response.usageMetadata || { totalTokenCount: 0 };
 
         const finalResult = {
             success: true,
@@ -279,21 +282,13 @@ ${combinedContext.substring(0, 30000)}
             timestamp: Date.now()
         };
 
-        // --- STAGE 4: CACHE & LOG ---
+        // --- STAGE 4: CACHE ---
         await db.collection('research_cache').doc(cacheKey).set(finalResult);
-
-        if (usage.totalTokenCount > 0) {
-            await db.collection('users').doc(uid).update({
-                'usageStats.totalTokens': admin.firestore.FieldValue.increment(usage.totalTokenCount),
-                'usageStats.requestCount': admin.firestore.FieldValue.increment(1),
-                'usageStats.lastActiveAt': admin.firestore.FieldValue.serverTimestamp()
-            });
-        }
 
         return res.status(200).json(finalResult);
 
     } catch (error) {
-        console.error("[Research] Critical Error:", error);
+        console.error("[Research] Error:", error);
         return res.status(500).json({ error: error.message });
     }
 }
