@@ -66,44 +66,41 @@ async function getTop5GoogleLinks(keyword, language = 'vi') {
     const { document } = parseHTML(html);
     const links = [];
 
-    // Strategy 1: Look for titles in Basic Version (usually inside a tags with h3 or plain text)
-    const resultBlocks = document.querySelectorAll('div.kCrYT, div.g, div.ZINsC');
-    console.log(`[Research] Found ${resultBlocks.length} potential result blocks`);
+    // Strategy 1: Target all links following the Google redirect pattern (most robust)
+    const allLinks = document.querySelectorAll('a');
+    console.log(`[Research] Total anchors found: ${allLinks.length}`);
 
-    for (const block of resultBlocks) {
+    for (const a of allLinks) {
         if (links.length >= 5) break;
 
-        const a = block.querySelector('a');
-        const h3 = block.querySelector('h3');
+        let url = a.getAttribute('href');
+        if (!url || !url.startsWith('/url?q=')) continue;
 
-        if (a) {
-            let url = a.getAttribute('href');
-            let title = h3 ? h3.textContent?.trim() : a.textContent?.trim();
+        // Extract title: Look for h3 inside, or fallback to the text content of the anchor
+        const h3 = a.querySelector('h3');
+        const title = (h3 ? h3.textContent : a.textContent)?.trim();
 
-            if (url && title && title.length > 5) {
-                // Handle Google redirect URLs: /url?q=https://example.com/...
-                if (url.startsWith('/url?q=')) {
-                    try {
-                        const urlObj = new URL('https://www.google.com' + url);
-                        url = urlObj.searchParams.get('q');
-                    } catch (e) {
-                        // Fallback parsing
-                        url = url.split('q=')[1]?.split('&')[0];
-                        if (url) url = decodeURIComponent(url);
+        if (title && title.length > 5 && !title.includes('Cached') && !title.includes('Similar')) {
+            try {
+                // Parse correctly: /url?q=https://example.com/...
+                const urlParams = new URLSearchParams(url.split('?')[1]);
+                const decodedUrl = urlParams.get('q');
+
+                if (decodedUrl && decodedUrl.startsWith('http') && !decodedUrl.includes('google.com')) {
+                    if (!links.some(l => l.url === decodedUrl)) {
+                        // Clean up titles (remove breadcrumbs like " › ...")
+                        const cleanTitle = title.split(' › ')[0].split('...')[0].trim();
+                        links.push({ title: cleanTitle, url: decodedUrl });
                     }
                 }
-
-                if (url && url.startsWith('http') && !url.includes('google.com') && !url.includes('webcache.googleusercontent.com')) {
-                    if (!links.some(l => l.url === url)) {
-                        links.push({ title: title.split(' › ')[0], url });
-                    }
-                }
+            } catch (e) {
+                console.warn(`[Research] Skip malformed URL: ${url}`);
             }
         }
     }
 
     if (links.length === 0) {
-        console.warn('[Research] No links found. Snippet of HTML title:', document.title);
+        console.warn('[Research] No links found with Strategy 1. Snippet of HTML title:', document.title);
     }
 
     return links;
