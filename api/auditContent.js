@@ -19,6 +19,7 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 import { robustJSONParse } from '../utils.js';
+import { loadSkill } from '../skillLoader.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -68,21 +69,17 @@ export default async function handler(req, res) {
         const { OpenAI } = await import('openai');
         const openai = new OpenAI({ baseURL: 'https://api.deepseek.com', apiKey: dkKey });
 
+        const skillContent = await loadSkill('audit-logic-legal');
         const systemInstruction = `
-You are **MOODBIZ LOGIC & LEGAL AUDITOR**.
+You are **MOODBIZ LOGIC & LEGAL AUDITOR** (Agent Skill).
+Base your auditing on the following skill definition:
+
+${skillContent}
 
 ### NHIỆM VỤ QUAN TRỌNG NHẤT (MANDATORY):
-Chỉ được báo cáo lỗi khi tìm thấy sự vi phạm trực tiếp đối với các quy tắc trong **Module 3 (MarkRules)** hoặc **Module 4 (LegalRules)**.
-
-### QUY TẮC TRÍCH DẪN (CITATION RULES):
-1. **TRÍCH DẪN CHÍNH XÁC**: Trường "citation" TUYỆT ĐỐI phải khớp 100% với TÊN của quy tắc được cung cấp (ví dụ: "MarkRule: Logic_01" hoặc "LegalRule: QC_Thuoc").
-2. **CẤM DÙNG NHÃN CHUNG CHUNG**: Không được sử dụng các nhãn như "Logic Flaw", "AI Hallucination", "Legal Violation" trừ khi chúng xuất hiện dưới dạng tiêu đề (###) trong văn bản SOP phía dưới.
-3. **CẤM BỊA ĐẶT**: Nếu một vấn đề không vi phạm bất kỳ quy tắc cụ thể nào trong danh sách -> KHÔNG ĐƯỢC BÁO LỖI. Bạn sẽ bị trừ điểm nếu báo cáo lỗi mà không có trích dẫn từ SOP thật.
-
-### PHÂN LOẠI:
-- category: "ai_logic" (nếu thuộc Module 3)
-- category: "legal" (nếu thuộc Module 4)
-- Ưu tiên "legal" nếu vi phạm cả hai.
+1. Chỉ được báo cáo lỗi khi tìm thấy sự vi phạm trực tiếp đối với các quy tắc được cung cấp (Module 3: MarkRules hoặc Module 4: LegalRules).
+2. TRÍCH DẪN CHÍNH XÁC: Trường "citation" TUYỆT ĐỐI phải khớp 100% với TÊN của quy tắc được cung cấp (ví dụ: "MarkRule: Logic_01").
+3. CẤM BỊA ĐẶT: Nếu một vấn đề không vi phạm quy tắc cụ thể nào -> KHÔNG ĐƯỢC BÁO LỖI.
 
 JSON Schema:
 {
@@ -94,7 +91,7 @@ JSON Schema:
        "citation": "Tên chính xác sau dấu '### MarkRule:' hoặc '### LegalRule:'",
        "reason": "Giải thích chi tiết lỗi dựa trên SOP (Tiếng Việt)",
        "severity": "High" | "Medium" | "Low",
-       "suggestion": "Gợi ý sửa đổi phù hợp (theo ${language || 'Vietnamese'})"
+       "suggestion": "Gợi ý sửa đổi phù hợp"
     }
   ]
 }
@@ -112,7 +109,7 @@ JSON Schema:
 
       } catch (e) {
         console.error("DeepSeek (Logic/Legal) Error:", e.message);
-        errors.push(`Logic/Legal Error: ${e.message}`);
+        errors.push(`Logic / Legal Error: ${e.message} `);
         // Fallback or just return empty for this block? 
         // Request implied DeepSeek is dedicated. We can fallback to Gemini if needed but user strictly separated.
         // Let's add a robust fallback just in case or leave consistent with request?
@@ -155,17 +152,16 @@ JSON Schema:
           required: ["summary", "identified_issues"]
         };
 
+        const skillContent = await loadSkill('audit-brand-product');
         const systemInstruction = `
-You are MOODBIZ BRAND & PRODUCT AUDITOR (Gemini).
-Your job is to specific check:
-1. **BRAND**: Tone of voice, forbidden words, visual style match.
-2. **PRODUCT**: Specification accuracy, feature claims.
+You are ** MOODBIZ BRAND & PRODUCT AUDITOR ** (Agent Skill).
+Base your auditing on the following skill definition:
 
-Do NOT check Logic, Legal, or Spelling.
+${skillContent}
 
 JSON Output Only.
-Summary/Reason in Vietnamese. Suggestion in ${language || 'Vietnamese'}.
-`;
+          Summary / Reason in Vietnamese.Suggestion in ${language || 'Vietnamese'}.
+        `;
         const model = genAI.getGenerativeModel({
           model: 'gemini-2.0-flash',
           systemInstruction: systemInstruction,
@@ -178,150 +174,86 @@ Summary/Reason in Vietnamese. Suggestion in ${language || 'Vietnamese'}.
 
       } catch (e) {
         console.error("Gemini (Brand/Product) Error:", e.message);
-        errors.push(`Brand/Product Error: ${e.message}`);
+        errors.push(`Brand / Product Error: ${e.message} `);
       }
       return result;
     })();
 
-    // --- 3. LANGUAGE STREAM (Hugging Face / Qwen) ---
-    const hfPromise = (async () => {
+    // --- 3. LANGUAGE STREAM (Gemini - Linguistic Expert Agent) ---
+    const languagePromise = (async () => {
       const targetLang = language || 'Vietnamese';
-      const systemInstruction = `
-You are **MOODBIZ LANGUAGE AUDITOR**.
-Your ONLY job is to check for **SPELLING**, **GRAMMAR**, and **CRITICAL STRUCTURAL ERRORS** in ${targetLang}.
-
-### 🚨 CONSERVATIVE AUDIT STRATEGY (CRITICAL):
-1. **PRECISION OVER RECALL**: Only report an issue if it is a DEFINTIVE error. If a phrase is natural and widely used (even if not "perfect" academic style), **DO NOT REPORT IT**.
-2. **NO STYLISTIC CHANGES**: Never suggest changes to make the text "better", "clearer", or "more professional" unless there is a clear error. Preserve the author's original voice.
-3. **NO SYNONYN SUGGESTIONS**: Do not replace a correct word with a synonym.
-4. **CONTEXTUAL AWARENESS**: Phrases like "đang phát triển mạnh mẽ hơn bao giờ" or "hơn bao giờ hết" are **CORRECT** and natural. Do NOT ask for more words like "nay" or "hết" if the meaning is already clear.
-
-### SPELLING & MARK ERRORS (CRITICAL):
-1. **OBJECTIVE ERRORS OVER STYLE**: While style is subjective, spelling and mark errors (dấu thanh) are objective. You **MUST** report them.
-2. **CONTEXTUAL SPELLING**: Detect words that are valid in isolation but incorrect in context.
-   - Example: "thực té" -> "thực tế" (**MUST AUDIT**)
-   - Example: "tham quang" -> "tham quan" (**MUST AUDIT**)
-3. **DIACRITICS (DẤU)**: Be extremely careful with Vietnamese marks. A missing or wrong mark is a High severity error.
-
-### 🚩 RED FLAGS / KIÊNG KỴ (MUST AUDIT):
-1. **TỪ NGỮ SÁO RỖNG**: Cảnh báo các cụm từ dập khuôn như: "Trong thời đại hiện nay", "Hơn nữa", "Bên cạnh đó".
-2. **CÂU QUÁ DÀI**: Cảnh báo các câu có độ dài > 30 từ và cấu trúc phức tạp, gây khó hiểu.
-3. **GIỌNG VĂN THỤ ĐỘNG (PASSIVE VOICE)**: Cảnh báo việc sử dụng câu bị động (ví dụ: các câu dùng "bị", "được" để diễn đạt hành động một cách thụ động) làm giảm sức thuyết phục.
-
-### FEW-SHOT EXAMPLES (WHAT NOT TO AUDIT):
-- **Input**: "hơn bao giờ" -> **Action**: IGNORE (Correct/Natural)
-- **Input**: "nhiều hơn bao giờ hết" -> **Action**: IGNORE (Correct/Natural)
-- **Input**: "mạnh mẽ" -> **Action**: IGNORE (Correct spelling)
-
-### WHAT TO AUDIT:
-- Red Flags (Clichés, Long Sentences, Passive Voice)
-- Spelling (e.g., "mạnh mẻ" -> "mạnh mẽ")
-- Wrong words (e.g., "tham quan" vs "tham quang")
-- Broken grammar that makes the sentence incomprehensible.
-
-**JSON SCHEMA:**
-{
-  "summary": "Brief comment on language quality (in Vietnamese)",
-  "identified_issues": [
-    {
-       "category": "language",
-       "problematic_text": "text segment",
-       "citation": "Spelling/Grammar",
-       "reason": "Why is it wrong? (in Vietnamese)",
-       "severity": "Low/Medium/High",
-       "suggestion": "Corrected text (in ${targetLang})"
-    }
-  ]
-}
-`;
-      const userPrompt = `Text to check:\n"""\n${text}\n"""\n\nReturn strictly valid JSON.`;
-
+      let result = { identified_issues: [] };
       try {
-        const hfToken = process.env.HF_ACCESS_TOKEN;
-        const modelName = "Qwen/Qwen2.5-72B-Instruct";
+        const gmKey = process.env.GEMINI_API_KEY;
+        if (!gmKey) throw new Error("Missing Gemini Key");
 
-        // DÙNG LẠI HfInference ĐÚNG CÁCH
-        const { HfInference } = await import("@huggingface/inference");
+        const { GoogleGenerativeAI, SchemaType } = await import('@google/generative-ai');
+        const genAI = new GoogleGenerativeAI(gmKey);
 
-        // Không truyền endpointUrl vào đây
-        const hf = new HfInference(hfToken);
+        const langResponseSchema = {
+          type: SchemaType.OBJECT,
+          properties: {
+            summary: { type: SchemaType.STRING },
+            identified_issues: {
+              type: SchemaType.ARRAY,
+              items: {
+                type: SchemaType.OBJECT,
+                properties: {
+                  category: { type: SchemaType.STRING, description: "always 'language'" },
+                  problematic_text: { type: SchemaType.STRING },
+                  citation: { type: SchemaType.STRING, description: "Spelling, Grammar, or RedFlag" },
+                  reason: { type: SchemaType.STRING },
+                  severity: { type: SchemaType.STRING },
+                  suggestion: { type: SchemaType.STRING }
+                },
+                required: ["category", "problematic_text", "reason", "suggestion", "citation", "severity"]
+              }
+            }
+          },
+          required: ["summary", "identified_issues"]
+        };
 
-        const response = await hf.chatCompletion({
-          model: modelName,
-          messages: [
-            { role: "system", content: systemInstruction },
-            { role: "user", content: userPrompt }
-          ],
-          max_tokens: 4096,
-          temperature: 0.1,
-          response_format: { type: "json_object" }
+        const skillContent = await loadSkill('audit-linguistic-expert');
+        const systemInstruction = `
+You are ** MOODBIZ LINGUISTIC EXPERT ** (Agent Skill).
+Base your auditing on the following skill definition:
+
+${skillContent}
+
+### ADDITIONAL CONTEXT:
+        - Target Language: ${targetLang}
+        - Strategy: SIÊU BẢO THỦ(Anti - hallucination).Only audit objective errors.
+
+JSON Output Only.Summary / Reason in Vietnamese.Suggestion in the text's original language.
+`;
+        const model = genAI.getGenerativeModel({
+          model: 'gemini-2.0-flash',
+          systemInstruction: systemInstruction,
+          generationConfig: { temperature: 0.0, responseMimeType: 'application/json', responseSchema: langResponseSchema }
         });
 
-        const content = response.choices[0].message.content;
-        const jsonStr = content.replace(/```json\n?|\n?```/g, "").trim();
+        const response = await model.generateContent(`Text to audit: \n"""\n${text}\n"""`);
+        if (response.response.usageMetadata) tokensLang += response.response.usageMetadata.totalTokenCount || 0;
+        result = robustJSONParse(response.response.text());
 
-        let tokenCount = 0;
-        if (response.usage) {
-          tokenCount = response.usage.total_tokens || 0;
-        }
-
-        // Add token count to the result so we can access it outside
-        const parsed = robustJSONParse(jsonStr);
-        parsed._tokenUsage = tokenCount;
-
-        // Explicitly update the outer scope variable if accessible, or return it.
-        // Since this is an IIFE / async block, we should return it in the object 
-        // OR update the `tokensLang` variable if it was in scope.
-        // But `tokensLang` is in the outer scope. We can't easily assign to it from inside this Promise if it's not capturing the variable by reference/closure correctly or if we want to be cleaner.
-        // Actually, `tokensLang` *is* in scope (lines 58). So we can just assign to it.
-        if (tokenCount > 0) tokensLang += tokenCount;
-
-        return parsed;
       } catch (e) {
-        let status = e.response?.status;
-        let statusText = e.response?.statusText || "";
-        let bodyText = "";
-
-        if (e.response) {
-          try {
-            bodyText = await e.response.text();
-          } catch (_) {
-            bodyText = "[Không đọc được body từ HF]";
-          }
-        }
-
-        console.error(
-          `HF Language Error: status=${status || "Unknown"} ${statusText}`.trim()
-        );
-        console.error(`HF Language Error body: ${bodyText}`);
-
-        errors.push(`Language Error (HF ${status || "Unknown"}): ${e.message}`);
-
-        return {
-          summary: "Lỗi hệ thống Language Audit (HF).",
-          identified_issues: [
-            {
-              category: "language",
-              severity: "High",
-              problematic_text: "System Check",
-              citation: "API",
-              reason: `Kết nối HF thất bại (HTTP ${status || "Unknown"}): ${bodyText || e.message
-                }`,
-              suggestion:
-                "Kiểm tra lại modelName, Inference Providers và quota HF.",
-            },
-          ],
+        console.error("Gemini (Language Agent) Error:", e.message);
+        errors.push(`Language Agent Error: ${e.message} `);
+        result = {
+          summary: "Lỗi hệ thống Language Audit.",
+          identified_issues: [{ category: "language", severity: "High", problematic_text: "System", citation: "API", reason: e.message, suggestion: "Kiểm tra lại kết nối Gemini." }]
         };
       }
+      return result;
     })();
 
     // --- MERGE RESULTS ---
-    const [logicLegalResult, brandProductResult, hfResult] = await Promise.all([logicLegalPromise, brandProductPromise, hfPromise]);
+    const [logicLegalResult, brandProductResult, languageResult] = await Promise.all([logicLegalPromise, brandProductPromise, languagePromise]);
 
     const summaries = [
       logicLegalResult?.summary,
       brandProductResult?.summary,
-      hfResult?.summary
+      languageResult?.summary
     ].filter(s => s && s.trim().length > 0);
 
     const finalResult = {
@@ -329,7 +261,7 @@ Your ONLY job is to check for **SPELLING**, **GRAMMAR**, and **CRITICAL STRUCTUR
       identified_issues: [
         ...(logicLegalResult?.identified_issues || []),
         ...(brandProductResult?.identified_issues || []),
-        ...(hfResult?.identified_issues || [])
+        ...(languageResult?.identified_issues || [])
       ]
     };
 
@@ -340,7 +272,7 @@ Your ONLY job is to check for **SPELLING**, **GRAMMAR**, and **CRITICAL STRUCTUR
         severity: 'Low',
         problematic_text: 'System Warning',
         citation: 'System',
-        reason: `Một số module Audit gặp lỗi: ${errors.join(', ')}`,
+        reason: `Một số module Audit gặp lỗi: ${errors.join(', ')} `,
         suggestion: 'Vui lòng kiểm tra lại cấu hình.'
       });
     }
