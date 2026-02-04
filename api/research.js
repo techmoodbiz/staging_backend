@@ -91,7 +91,8 @@ async function getTop5Links(keyword, language = 'vi') {
             headers['Authorization'] = `Bearer ${jinaKey.trim()}`;
         }
 
-        const response = await fetch(jinaUrl, { headers, timeout: 10000 });
+        // Increased timeout to 30s for Jina Search
+        const response = await fetch(jinaUrl, { headers, timeout: 30000 });
         console.log(`[Research] Jina AI Search Status: ${response.status}`);
 
         if (response.ok) {
@@ -117,20 +118,45 @@ async function getTop5Links(keyword, language = 'vi') {
         console.log(`[Research] Tier 2: Falling back to DuckDuckGo Lite...`);
         const ddgUrl = `https://duckduckgo.com/lite/?q=${encodeURIComponent(keyword)}&kl=${language === 'vi' ? 'vn-vi' : 'us-en'}`;
         const response = await fetch(ddgUrl, {
-            headers: { 'User-Agent': USER_AGENTS[0] },
-            timeout: 10000
+            headers: {
+                'User-Agent': USER_AGENTS[0],
+                'Accept': 'text/html'
+            },
+            timeout: 15000
         });
+
+        console.log(`[Research] DDG Lite Status: ${response.status}`);
 
         if (response.ok) {
             const html = await response.text();
             const { document } = parseHTML(html);
-            const anchors = Array.from(document.querySelectorAll('a.result-link'));
+
+            // Try different selectors for DDG Lite
+            let anchors = Array.from(document.querySelectorAll('a.result-link'));
+            if (anchors.length === 0) {
+                // Lite version often has links in tables
+                anchors = Array.from(document.querySelectorAll('td a[rel="nofollow"]'));
+            }
+            if (anchors.length === 0) {
+                anchors = Array.from(document.querySelectorAll('a')).filter(a => {
+                    const href = a.getAttribute('href');
+                    return href && href.startsWith('http') && !href.includes('duckduckgo.com');
+                });
+            }
+
+            console.log(`[Research] DDG Lite found ${anchors.length} potential links`);
+
             const links = [];
             for (const a of anchors) {
                 if (links.length >= 5) break;
                 let url = a.getAttribute('href');
+                let title = a.textContent?.trim();
+
                 if (url && url.startsWith('http')) {
-                    links.push({ title: a.textContent.trim(), url });
+                    // Filter out non-content titles if possible
+                    if (title && title.length > 5) {
+                        links.push({ title, url });
+                    }
                 }
             }
             if (links.length > 0) return links;
