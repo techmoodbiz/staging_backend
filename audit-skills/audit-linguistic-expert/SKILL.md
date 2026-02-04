@@ -33,6 +33,7 @@ version: 1
 ### 4. Chất lượng Giải thích (Reasoning Quality)
 - **TRÁNH VÒNG VO**: Tuyệt đối không viết "X phải là X". 
 - **RÕ RÀNG**: Giải thích tại sao từ đó sai (sai chính tả, thiếu từ, hay sai ngữ pháp).
+- **CẤM BÁO LỖI TRÙNG LẶP (NO-OP)**: Tuyệt đối không được báo lỗi nếu `problematic_text` và `suggestion` giống hệt nhau. Nếu không có gì để sửa, KHÔNG ĐƯỢC đưa vào danh sách `identified_issues`.
 
 ### 3. Đa ngôn ngữ
 - **English**: Grammar, Spelling (Oxford/US standard).

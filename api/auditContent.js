@@ -256,13 +256,34 @@ JSON Output Only.Summary / Reason in Vietnamese.Suggestion in the text's origina
       languageResult?.summary
     ].filter(s => s && s.trim().length > 0);
 
+    // --- MERGE & FILTER RESULTS ---
+    const allIssues = [
+      ...(logicLegalResult?.identified_issues || []),
+      ...(brandProductResult?.identified_issues || []),
+      ...(languageResult?.identified_issues || [])
+    ];
+
+    // Deduplicate and filter out no-op suggestions
+    const uniqueIssues = [];
+    const seenIssues = new Set();
+
+    for (const issue of allIssues) {
+      if (!issue.problematic_text || !issue.suggestion) continue;
+
+      // Filter out identical suggestons
+      if (issue.problematic_text.trim() === issue.suggestion.trim()) continue;
+
+      // Unique key based on text and suggestion
+      const key = `${issue.problematic_text}|${issue.suggestion}`;
+      if (!seenIssues.has(key)) {
+        uniqueIssues.push(issue);
+        seenIssues.add(key);
+      }
+    }
+
     const finalResult = {
       summary: summaries.join(' | ') || "Hoàn tất kiểm tra.",
-      identified_issues: [
-        ...(logicLegalResult?.identified_issues || []),
-        ...(brandProductResult?.identified_issues || []),
-        ...(languageResult?.identified_issues || [])
-      ]
+      identified_issues: uniqueIssues
     };
 
     if (errors.length > 0) {
