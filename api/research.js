@@ -278,20 +278,38 @@ export default async function handler(req, res) {
         const combinedContext = successfulScrapes.map((s, i) => `--- SOURCE ${i + 1}: ${s.title} (${s.url}) ---\n${s.content}`).join('\n\n');
 
         const prompt = `
-Role: Senior Content Researcher.
-Task: Analyze research data for: "${keyword}".
+Role: Senior Strategy & Research consultant.
+Task: Provide a "Premium Research Brief" for: "${keyword}".
 Language: ${language === 'vi' ? 'Tiếng Việt' : 'English'}.
 
-Extract:
-1. Core themes and key topics.
-2. Unique insights and specific data points.
-3. Content structure of competitors.
-4. Content Gaps (what's missing?).
-5. Key statistics.
+REQUIRED STRUCTURE (Use these exact Markdown patterns):
 
-Format: Professional Markdown.
+# 🎯 Executive Summary
+[A concise high-level overview of the topic]
 
-Data:
+## 💎 Core Themes & Key Topics
+- **[Topic Name]**: [Description with data points]
+- **[Topic Name]**: [Description with data points]
+
+## 📊 Competitor Content Structure
+[Explain how top results are organized. What are their winning headers/styles?]
+
+## 🚩 Content Gaps (Strategic Opportunity)
+> [!IMPORTANT]
+> This is your competitive edge. Identify what the top 5 sources MISSED or could explain better.
+
+## 📈 Key Statistics & Insights
+- [List 3-5 specific numbers, percentages, or high-impact facts found]
+
+## 💡 Content Generation Tips
+[How should the user approach writing about this topic to rank higher?]
+
+Formatting Rules:
+1. Use **bold** for emphasis on key terms.
+2. Use > [!NOTE] or > [!IMPORTANT] blocks for high-value insights.
+3. Keep the tone professional, analytical, and "expensive".
+
+Data for Analysis:
 """
 ${combinedContext.substring(0, 30000)}
 """
