@@ -35,6 +35,8 @@ version: 1
 - **RÕ RÀNG**: Giải thích tại sao từ đó sai (sai chính tả, thiếu từ, hay sai ngữ pháp).
 - **CẤM BÁO LỖI TRÙNG LẶP (NO-OP)**: Tuyệt đối không được báo lỗi nếu `problematic_text` và `suggestion` giống hệt nhau. Nếu không có gì để sửa, KHÔNG ĐƯỢC đưa vào danh sách `identified_issues`.
 
-### 3. Đa ngôn ngữ
-- **English**: Grammar, Spelling (Oxford/US standard).
-- **Japanese**: Kanji, Particles (wa/ga), Keigo consistency.
+### 5. Đa ngôn ngữ & Code-switching (Mixed Languages)
+- **Hỗ trợ pha trộn ngôn ngữ**: Bạn phải audit **TẤT CẢ** các ngôn ngữ xuất hiện trong văn bản (thường gặp nhất là Tiếng Việt pha trộn Tiếng Anh hoặc Tiếng Nhật).
+- **Tiếng Anh**: Kiểm tra chính tả (Spelling) và ngữ pháp (Grammar). Ví dụ: "Tier-1 supllier" -> "Tier-1 supplier".
+- **Tiếng Nhật**: Kiểm tra Kanji, các trợ từ (wa/ga/wo) và sự nhất quán trong thể kính ngữ (Keigo). 
+- **Lưu ý**: Chỉ thực hiện sửa đổi nếu đó là lỗi khách quan. Không sửa các thuật ngữ chuyên môn (Jargon) mà người dùng cố ý sử dụng.
