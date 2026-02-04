@@ -8,7 +8,9 @@ import path from 'path';
  */
 export async function loadSkill(skillName) {
     try {
-        const skillPath = path.join(process.cwd(), '.agent', 'skills', skillName, 'SKILL.md');
+        // Using relative path for Vercel NFT compatibility
+        const skillPath = path.join(process.cwd(), 'staging_backend', 'audit-skills', skillName, 'SKILL.md');
+
         if (fs.existsSync(skillPath)) {
             const content = fs.readFileSync(skillPath, 'utf8');
             // Simple cleaning of frontmatter if needed, but for prompt we can send full md
