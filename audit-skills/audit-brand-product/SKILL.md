@@ -8,8 +8,8 @@ version: 1
 # Brand & Product Audit Skill
 
 ## Mục tiêu
-- Đảm bảo nội dung đúng "chất" thương hiệu (Tone of Voice).
-- Đảm bảo thông số sản phẩm và đặc tính (Features) chính xác tuyệt đối.
+- **Chế độ Toàn thương hiệu (General)**: Đảm bảo nội dung đúng "chất" thương hiệu (Tone of Voice, Visual Style). KHÔNG kiểm tra thông số sản phẩm cụ thể.
+- **Chế độ Sản phẩm (Product)**: Đảm bảo cả "chất" thương hiệu VÀ các thông số kỹ thuật, đặc tính của sản phẩm đó phải chính xác tuyệt đối.
 
 ## Quy tắc Audit (MANDATORY)
 
