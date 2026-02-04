@@ -38,7 +38,9 @@ async function getTop5GoogleLinks(keyword, language = 'vi') {
     const response = await fetch(searchUrl, {
         headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
             'Accept-Language': language === 'vi' ? 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7' : 'en-US,en;q=0.9',
+            'Referer': 'https://www.google.com/',
         },
         agent: httpsAgent,
         timeout: 10000
@@ -50,36 +52,68 @@ async function getTop5GoogleLinks(keyword, language = 'vi') {
     const { document } = parseHTML(html);
 
     const links = [];
-    // Standard Google result selector (usually inside 'g' class or h3 parent)
-    const results = document.querySelectorAll('div.g');
 
-    for (const result of results) {
-        if (links.length >= 5) break;
+    // Strategy 1: Look for h3 titles (most reliable across Google versions)
+    const h3s = document.querySelectorAll('h3');
+    for (const h3 of h3s) {
+        if (links.length >= 6) break; // Fetch slightly more to filter out noise
 
-        const a = result.querySelector('a');
-        const h3 = result.querySelector('h3');
-        const url = a?.getAttribute('href');
-        const title = h3?.textContent;
+        let container = h3.parentElement;
+        let anchor = null;
 
-        if (url && url.startsWith('http') && !url.includes('google.com') && title) {
-            links.push({ title, url });
+        // Climb up to find the nearest anchor tag
+        let depth = 0;
+        while (container && depth < 5) {
+            if (container.tagName === 'A') {
+                anchor = container;
+                break;
+            }
+            container = container.parentElement;
+            depth++;
         }
-    }
 
-    // Fallback if div.g selector fails (Google changes it often)
-    if (links.length === 0) {
-        const allLinks = document.querySelectorAll('a');
-        for (const a of allLinks) {
-            if (links.length >= 5) break;
-            const href = a.getAttribute('href');
-            const h3 = a.querySelector('h3');
-            if (href && href.startsWith('http') && !href.includes('google.com') && h3) {
-                links.push({ title: h3.textContent, url: href });
+        if (anchor) {
+            let url = anchor.getAttribute('href');
+            let title = h3.textContent?.trim();
+
+            if (url && title) {
+                // Handle Google redirect URLs: /url?q=https://example.com/...
+                if (url.startsWith('/url?q=')) {
+                    url = new URLSearchParams(url.split('?')[1]).get('q');
+                }
+
+                if (url && url.startsWith('http') && !url.includes('google.com') && !url.includes('webcache.googleusercontent.com')) {
+                    // Avoid duplicates
+                    if (!links.some(l => l.url === url)) {
+                        links.push({ title, url });
+                    }
+                }
             }
         }
     }
 
-    return links;
+    // Strategy 2: Fallback to div.g if Strategy 1 found nothing
+    if (links.length === 0) {
+        const results = document.querySelectorAll('div.g');
+        for (const result of results) {
+            if (links.length >= 5) break;
+            const a = result.querySelector('a');
+            const h3 = result.querySelector('h3');
+            let url = a?.getAttribute('href');
+            const title = h3?.textContent?.trim();
+
+            if (url && title) {
+                if (url.startsWith('/url?q=')) {
+                    url = new URLSearchParams(url.split('?')[1]).get('q');
+                }
+                if (url && url.startsWith('http') && !url.includes('google.com')) {
+                    links.push({ title, url });
+                }
+            }
+        }
+    }
+
+    return links.slice(0, 5);
 }
 
 /**
