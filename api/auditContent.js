@@ -196,6 +196,13 @@ Your ONLY job is to check for **SPELLING**, **GRAMMAR**, and **CRITICAL STRUCTUR
 3. **NO SYNONYN SUGGESTIONS**: Do not replace a correct word with a synonym.
 4. **CONTEXTUAL AWARENESS**: Phrases like "đang phát triển mạnh mẽ hơn bao giờ" or "hơn bao giờ hết" are **CORRECT** and natural. Do NOT ask for more words like "nay" or "hết" if the meaning is already clear.
 
+### SPELLING & MARK ERRORS (CRITICAL):
+1. **OBJECTIVE ERRORS OVER STYLE**: While style is subjective, spelling and mark errors (dấu thanh) are objective. You **MUST** report them.
+2. **CONTEXTUAL SPELLING**: Detect words that are valid in isolation but incorrect in context.
+   - Example: "thực té" -> "thực tế" (**MUST AUDIT**)
+   - Example: "tham quang" -> "tham quan" (**MUST AUDIT**)
+3. **DIACRITICS (DẤU)**: Be extremely careful with Vietnamese marks. A missing or wrong mark is a High severity error.
+
 ### 🚩 RED FLAGS / KIÊNG KỴ (MUST AUDIT):
 1. **TỪ NGỮ SÁO RỖNG**: Cảnh báo các cụm từ dập khuôn như: "Trong thời đại hiện nay", "Hơn nữa", "Bên cạnh đó".
 2. **CÂU QUÁ DÀI**: Cảnh báo các câu có độ dài > 30 từ và cấu trúc phức tạp, gây khó hiểu.
@@ -246,7 +253,7 @@ Your ONLY job is to check for **SPELLING**, **GRAMMAR**, and **CRITICAL STRUCTUR
             { role: "user", content: userPrompt }
           ],
           max_tokens: 4096,
-          temperature: 0.4,
+          temperature: 0.1,
           response_format: { type: "json_object" }
         });
 
