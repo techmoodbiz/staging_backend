@@ -28,79 +28,149 @@ const httpsAgent = new https.Agent({
     rejectUnauthorized: false,
 });
 
+// Helper for random delay
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+const USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_1_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1',
+    'Mozilla/5.0 (iPad; CPU OS 17_1_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/120.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/120.0'
+];
+
 /**
- * Stage 1: Search Extraction (Pivot to DuckDuckGo)
- * Google blocks most bot requests. DuckDuckGo HTML is much more reliable.
+ * Advanced Stealth Fetch with randomized headers and behavior
  */
-async function getTop5Links(keyword, language = 'vi') {
-    // We use DuckDuckGo HTML version which is very easy to scrape and reliable.
-    const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(keyword)}&kl=${language === 'vi' ? 'vn-vi' : 'us-en'}`;
+async function stealthFetch(url, language = 'vi') {
+    const ua = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+    const isMobile = ua.includes('Mobile');
 
-    console.log(`[Research] Fetching: ${searchUrl}`);
+    // Random delay to avoid patterns (200ms - 800ms)
+    await sleep(200 + Math.random() * 600);
 
-    const response = await fetch(searchUrl, {
-        headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        },
-        timeout: 10000
-    });
+    const headers = {
+        'User-Agent': ua,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'Accept-Language': language === 'vi' ? 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7' : 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Cache-Control': 'max-age=0',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        // Common cookies to bypass consent pages
+        'Cookie': 'SOCS=CAISHAgBEhJnd3NfMjAyMzA4MzAtMF9SQzIaAnZpIAEaBgiA_LaoBg; CONSENT=YES+cb.20230531-04-p0.en+FX+908',
+    };
 
-    if (!response.ok) {
-        console.error(`[Research] Search Service Error: ${response.status}`);
-        throw new Error(`Search service failed with status ${response.status}`);
+    if (!isMobile) {
+        headers['sec-ch-ua'] = '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"';
+        headers['sec-ch-ua-mobile'] = '?0';
+        headers['sec-ch-ua-platform'] = '"Windows"';
     }
 
-    const html = await response.text();
-    const { document } = parseHTML(html);
-    const links = [];
+    return fetch(url, { headers, agent: httpsAgent, timeout: 15000 });
+}
 
-    // DuckDuckGo HTML structure: <a class="result__a" href="...">Title</a>
-    const results = document.querySelectorAll('a.result__a');
-    console.log(`[Research] Found ${results.length} links on DuckDuckGo`);
+/**
+ * Stage 1: Search Extraction
+ * Tries Google with Stealth Mode, fallbacks to Bing or DuckDuckGo if blocked.
+ */
+async function getTop5Links(keyword, language = 'vi') {
+    const engines = [
+        {
+            name: 'Google',
+            url: `https://www.google.com/search?q=${encodeURIComponent(keyword)}&hl=${language}&gbv=1`,
+            selector: '/url?q=',
+            titleSelector: 'h3'
+        },
+        {
+            name: 'Bing',
+            url: `https://www.bing.com/search?q=${encodeURIComponent(keyword)}&setlang=${language === 'vi' ? 'vi' : 'en'}`,
+            selector: 'li.b_algo h2 a',
+            directUrl: true
+        },
+        {
+            name: 'DuckDuckGo',
+            url: `https://html.duckduckgo.com/html/?q=${encodeURIComponent(keyword)}&kl=${language === 'vi' ? 'vn-vi' : 'us-en'}`,
+            selector: 'a.result__a',
+            directUrl: true
+        }
+    ];
 
-    for (const a of results) {
-        if (links.length >= 5) break;
+    for (const engine of engines) {
+        try {
+            console.log(`[Research] Trying ${engine.name}: ${engine.url}`);
+            const response = await stealthFetch(engine.url, language);
 
-        const title = a.textContent?.trim();
-        let url = a.getAttribute('href');
+            if (!response.ok) {
+                console.warn(`[Research] ${engine.name} failed with ${response.status}`);
+                continue;
+            }
 
-        if (url && title && title.length > 5) {
-            // DuckDuckGo sometimes uses a proxy link: //duckduckgo.com/l/?uddg=...
-            if (url.includes('uddg=')) {
-                try {
-                    const urlParams = new URLSearchParams(url.split('?')[1]);
-                    url = urlParams.get('uddg');
-                } catch (e) {
-                    // skip
+            const html = await response.text();
+
+            // Basic CAPTCHA/Block check
+            if (html.includes('google.com/sorry/index') || html.includes('captcha') || html.includes('Sign in') || html.includes('Đăng nhập')) {
+                console.warn(`[Research] ${engine.name} detected bot blocking.`);
+                continue;
+            }
+
+            const { document } = parseHTML(html);
+            const links = [];
+            const items = document.querySelectorAll(engine.selector.includes('/') ? 'a' : engine.selector);
+
+            console.log(`[Research] Found ${items.length} items on ${engine.name}`);
+
+            for (const item of items) {
+                if (links.length >= 5) break;
+
+                let url = item.getAttribute('href');
+                let title = '';
+
+                if (engine.name === 'Google') {
+                    if (!url || !url.startsWith('/url?q=')) continue;
+                    const h3 = item.querySelector('h3');
+                    title = (h3 ? h3.textContent : item.textContent)?.trim();
+
+                    try {
+                        const urlParams = new URLSearchParams(url.split('?')[1]);
+                        url = urlParams.get('q');
+                    } catch (e) { continue; }
+                } else {
+                    title = item.textContent?.trim();
+                }
+
+                if (url && title && title.length > 5 && url.startsWith('http') && !url.includes(engine.name.toLowerCase())) {
+                    if (!links.some(l => l.url === url)) {
+                        links.push({ title: title.split(' › ')[0].trim(), url });
+                    }
                 }
             }
 
-            if (url && url.startsWith('http') && !url.includes('duckduckgo.com')) {
-                if (!links.some(l => l.url === url)) {
-                    links.push({ title, url });
-                }
+            if (links.length > 0) {
+                console.log(`[Research] Successfully extracted ${links.length} links using ${engine.name}`);
+                return links;
             }
+        } catch (error) {
+            console.error(`[Research] Error with ${engine.name}:`, error.message);
         }
     }
 
-    return links;
+    throw new Error("Tất cả các công cụ tìm kiếm đều bị chặn. Vui lòng thử lại sau 5-10 phút.");
 }
 
 /**
  * Stage 2: Content Scraping
- * Scrapes a single URL and returns Markdown.
  */
 async function scrapeUrl(url) {
     try {
-        const response = await fetch(url, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            },
-            agent: url.startsWith('https') ? httpsAgent : null,
-            timeout: 15000
-        });
-
+        // Reuse stealthFetch for consistency
+        const response = await stealthFetch(url);
         if (!response.ok) return null;
 
         const html = await response.text();
@@ -131,7 +201,6 @@ async function scrapeUrl(url) {
 }
 
 export default async function handler(req, res) {
-    // Config CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -139,7 +208,6 @@ export default async function handler(req, res) {
     if (req.method === 'OPTIONS') return res.status(200).end();
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-    // Auth Verification
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
         return res.status(401).json({ error: 'Unauthorized' });
@@ -160,32 +228,16 @@ export default async function handler(req, res) {
 
         console.log(`[Research] Starting search for: "${keyword}" (${language})`);
 
-        // 1. Get Top 5 Links (Now using DuckDuckGo)
-        let links = [];
-        try {
-            links = await getTop5Links(keyword, language);
-        } catch (e) {
-            console.error("Search failed:", e);
-            return res.status(500).json({ error: e.message || "Failed to fetch search results" });
-        }
+        let links = await getTop5Links(keyword, language);
+        console.log(`[Research] Final links list:`, links.map(l => l.url));
 
-        if (links.length === 0) {
-            return res.status(404).json({ error: "No relevant search results found" });
-        }
-
-        console.log(`[Research] Found ${links.length} links. Starting parallel scrape...`);
-
-        // 2. Parallel Scrape
         const scrapeResults = await Promise.all(links.map(link => scrapeUrl(link.url)));
         const successfulScrapes = scrapeResults.filter(r => r !== null);
 
         if (successfulScrapes.length === 0) {
-            return res.status(404).json({ error: "Unable to extract content from any search results" });
+            return res.status(404).json({ error: "Không thể trích xuất nội dung từ các trang web tìm được." });
         }
 
-        console.log(`[Research] Successfully scraped ${successfulScrapes.length} sites. Analyzing with Gemini...`);
-
-        // 3. Gemini Synthesis
         const { GoogleGenerativeAI } = await import("@google/generative-ai");
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
         const model = genAI.getGenerativeModel({
@@ -197,21 +249,20 @@ export default async function handler(req, res) {
 
         const prompt = `
 Role: Senior Content Researcher & SEO Strategist.
-Task: Analyze the top 5 search results for the keyword: "${keyword}".
-
+Task: Analyze the top search results for the keyword: "${keyword}".
 Context: The user wants to write high-quality content based on this research.
 
 Instructions:
 1. Identify the core themes and topics covered across all sources.
-2. Extract unique insights, specific data points, or "golden nuggets" of information from each.
-3. Reverse-engineer the content structure of these top competitors (what sections they have).
-4. Identify "Content Gaps" - what are these websites missing that we can include to be better?
+2. Extract unique insights, specific data points, or factual "golden nuggets".
+3. Reverse-engineer the content structure of these top competitors.
+4. Identify "Content Gaps" - what are these websites missing that we can include?
 5. List key statistics or authoritative facts mentioned.
 
-Format the response in professional Markdown with clear headings and bullet points.
+Format in professional Markdown.
 Language: ${language === 'vi' ? 'Tiếng Việt' : 'English'}.
 
-Raw Scraped Data:
+Data:
 """
 ${combinedMarkdown.substring(0, 30000)}
 """
@@ -221,12 +272,11 @@ ${combinedMarkdown.substring(0, 30000)}
         const analysis = result.response.text();
         const usage = result.response.usageMetadata || { totalTokenCount: 0 };
 
-        // 4. Log Usage
         if (usage.totalTokenCount > 0) {
             try {
                 await db.collection('users').doc(uid).update({
-                    'usageStats.totalTokens': admin.firestore.increment(usage.totalTokenCount),
-                    'usageStats.requestCount': admin.firestore.increment(1),
+                    'usageStats.totalTokens': admin.firestore.FieldValue.increment(usage.totalTokenCount),
+                    'usageStats.requestCount': admin.firestore.FieldValue.increment(1),
                     'usageStats.lastActiveAt': admin.firestore.FieldValue.serverTimestamp()
                 });
             } catch (e) {
