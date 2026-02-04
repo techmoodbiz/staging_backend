@@ -33,16 +33,19 @@ const httpsAgent = new https.Agent({
  * Queries Google and returns top 5 organic links.
  */
 async function getTop5GoogleLinks(keyword, language = 'vi') {
-    // gbv=1 uses Google Basic Version, which is much easier to scrape and often bypasses JS-based bot detection
-    const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(keyword)}&hl=${language}&gbv=1`;
+    // We use a mobile User-Agent which often has simpler HTML and fewer blocks.
+    // gbv=1 (Google Basic Version) is used for easier parsing.
+    const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(keyword)}&hl=${language}&gbv=1&num=10`;
 
     console.log(`[Research] Fetching: ${searchUrl}`);
 
     const response = await fetch(searchUrl, {
         headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': language === 'vi' ? 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7' : 'en-US,en;q=0.9',
+            // Attempt to bypass "Before you continue" cookie consent page
+            'Cookie': 'CONSENT=YES+cb.20230531-04-p0.en+FX+908; SOCS=CAISHAgBEhJnd3NfMjAyMzA4MzAtMF9SQzIaAnZpIAEaBgiA_LaoBg',
             'Cache-Control': 'no-cache',
             'Pragma': 'no-cache'
         },
@@ -58,49 +61,49 @@ async function getTop5GoogleLinks(keyword, language = 'vi') {
     const html = await response.text();
 
     // Diagnostic log: check for common block patterns
-    if (html.includes('google.com/sorry/index')) {
+    if (html.includes('google.com/sorry/index') || html.includes('captcha')) {
         console.error('[Research] DETECTED: Google CAPTCHA/Block page');
-        throw new Error("Google has temporarily blocked our requests. Please try again in 10-15 minutes.");
+        throw new Error("Google has temporarily blocked our requests (CAPTCHA). Please wait 15 min.");
     }
 
     const { document } = parseHTML(html);
     const links = [];
 
-    // Strategy 1: Target all links following the Google redirect pattern (most robust)
-    const allLinks = document.querySelectorAll('a');
+    // In mobile gbv=1, we look for all <a> tags that have a /url?q= prefix
+    const allLinks = Array.from(document.querySelectorAll('a'));
     console.log(`[Research] Total anchors found: ${allLinks.length}`);
+    console.log(`[Research] Page Title: "${document.title}"`);
 
     for (const a of allLinks) {
         if (links.length >= 5) break;
 
-        let url = a.getAttribute('href');
-        if (!url || !url.startsWith('/url?q=')) continue;
+        let href = a.getAttribute('href');
+        if (!href || !href.startsWith('/url?q=')) continue;
 
-        // Extract title: Look for h3 inside, or fallback to the text content of the anchor
-        const h3 = a.querySelector('h3');
-        const title = (h3 ? h3.textContent : a.textContent)?.trim();
-
-        if (title && title.length > 5 && !title.includes('Cached') && !title.includes('Similar')) {
+        const title = a.textContent?.trim();
+        if (title && title.length > 5 && !title.includes('Similar') && !title.includes('Cached')) {
             try {
-                // Parse correctly: /url?q=https://example.com/...
-                const urlParams = new URLSearchParams(url.split('?')[1]);
-                const decodedUrl = urlParams.get('q');
+                // Extract target URL from Google redirect
+                const urlParams = new URLSearchParams(href.split('?')[1]);
+                const targetUrl = urlParams.get('q');
 
-                if (decodedUrl && decodedUrl.startsWith('http') && !decodedUrl.includes('google.com')) {
-                    if (!links.some(l => l.url === decodedUrl)) {
-                        // Clean up titles (remove breadcrumbs like " › ...")
+                if (targetUrl && targetUrl.startsWith('http') && !targetUrl.includes('google.com')) {
+                    if (!links.some(l => l.url === targetUrl)) {
                         const cleanTitle = title.split(' › ')[0].split('...')[0].trim();
-                        links.push({ title: cleanTitle, url: decodedUrl });
+                        links.push({ title: cleanTitle, url: targetUrl });
                     }
                 }
             } catch (e) {
-                console.warn(`[Research] Skip malformed URL: ${url}`);
+                // skip
             }
         }
     }
 
     if (links.length === 0) {
-        console.warn('[Research] No links found with Strategy 1. Snippet of HTML title:', document.title);
+        console.warn('[Research] Search failed. Snippet of HTML body:', html.substring(0, 500).replace(/\n/g, ' '));
+        if (html.includes('Sign in') || html.includes('Đăng nhập')) {
+            throw new Error("Google is redirecting to a Sign-in page. This usually happens after too many requests.");
+        }
     }
 
     return links;
