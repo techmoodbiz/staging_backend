@@ -33,87 +33,80 @@ const httpsAgent = new https.Agent({
  * Queries Google and returns top 5 organic links.
  */
 async function getTop5GoogleLinks(keyword, language = 'vi') {
-    const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(keyword)}&hl=${language}`;
+    // gbv=1 uses Google Basic Version, which is much easier to scrape and often bypasses JS-based bot detection
+    const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(keyword)}&hl=${language}&gbv=1`;
+
+    console.log(`[Research] Fetching: ${searchUrl}`);
 
     const response = await fetch(searchUrl, {
         headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             'Accept-Language': language === 'vi' ? 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7' : 'en-US,en;q=0.9',
-            'Referer': 'https://www.google.com/',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
         },
         agent: httpsAgent,
         timeout: 10000
     });
 
-    if (!response.ok) throw new Error(`Google Search failed with status ${response.status}`);
+    if (!response.ok) {
+        console.error(`[Research] Google Search HTTP Error: ${response.status}`);
+        throw new Error(`Google Search failed with status ${response.status}`);
+    }
 
     const html = await response.text();
-    const { document } = parseHTML(html);
 
+    // Diagnostic log: check for common block patterns
+    if (html.includes('google.com/sorry/index')) {
+        console.error('[Research] DETECTED: Google CAPTCHA/Block page');
+        throw new Error("Google has temporarily blocked our requests. Please try again in 10-15 minutes.");
+    }
+
+    const { document } = parseHTML(html);
     const links = [];
 
-    // Strategy 1: Look for h3 titles (most reliable across Google versions)
-    const h3s = document.querySelectorAll('h3');
-    for (const h3 of h3s) {
-        if (links.length >= 6) break; // Fetch slightly more to filter out noise
+    // Strategy 1: Look for titles in Basic Version (usually inside a tags with h3 or plain text)
+    const resultBlocks = document.querySelectorAll('div.kCrYT, div.g, div.ZINsC');
+    console.log(`[Research] Found ${resultBlocks.length} potential result blocks`);
 
-        let container = h3.parentElement;
-        let anchor = null;
+    for (const block of resultBlocks) {
+        if (links.length >= 5) break;
 
-        // Climb up to find the nearest anchor tag
-        let depth = 0;
-        while (container && depth < 5) {
-            if (container.tagName === 'A') {
-                anchor = container;
-                break;
-            }
-            container = container.parentElement;
-            depth++;
-        }
+        const a = block.querySelector('a');
+        const h3 = block.querySelector('h3');
 
-        if (anchor) {
-            let url = anchor.getAttribute('href');
-            let title = h3.textContent?.trim();
+        if (a) {
+            let url = a.getAttribute('href');
+            let title = h3 ? h3.textContent?.trim() : a.textContent?.trim();
 
-            if (url && title) {
+            if (url && title && title.length > 5) {
                 // Handle Google redirect URLs: /url?q=https://example.com/...
                 if (url.startsWith('/url?q=')) {
-                    url = new URLSearchParams(url.split('?')[1]).get('q');
+                    try {
+                        const urlObj = new URL('https://www.google.com' + url);
+                        url = urlObj.searchParams.get('q');
+                    } catch (e) {
+                        // Fallback parsing
+                        url = url.split('q=')[1]?.split('&')[0];
+                        if (url) url = decodeURIComponent(url);
+                    }
                 }
 
                 if (url && url.startsWith('http') && !url.includes('google.com') && !url.includes('webcache.googleusercontent.com')) {
-                    // Avoid duplicates
                     if (!links.some(l => l.url === url)) {
-                        links.push({ title, url });
+                        links.push({ title: title.split(' › ')[0], url });
                     }
                 }
             }
         }
     }
 
-    // Strategy 2: Fallback to div.g if Strategy 1 found nothing
     if (links.length === 0) {
-        const results = document.querySelectorAll('div.g');
-        for (const result of results) {
-            if (links.length >= 5) break;
-            const a = result.querySelector('a');
-            const h3 = result.querySelector('h3');
-            let url = a?.getAttribute('href');
-            const title = h3?.textContent?.trim();
-
-            if (url && title) {
-                if (url.startsWith('/url?q=')) {
-                    url = new URLSearchParams(url.split('?')[1]).get('q');
-                }
-                if (url && url.startsWith('http') && !url.includes('google.com')) {
-                    links.push({ title, url });
-                }
-            }
-        }
+        console.warn('[Research] No links found. Snippet of HTML title:', document.title);
     }
 
-    return links.slice(0, 5);
+    return links;
 }
 
 /**
@@ -195,7 +188,7 @@ export default async function handler(req, res) {
             links = await getTop5GoogleLinks(keyword, language);
         } catch (e) {
             console.error("Search failed:", e);
-            return res.status(500).json({ error: "Failed to fetch search results" });
+            return res.status(500).json({ error: e.message || "Failed to fetch search results" });
         }
 
         if (links.length === 0) {
