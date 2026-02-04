@@ -50,7 +50,9 @@ async function getTop5Links(keyword, language = 'vi') {
     if (API_KEY && CX) {
         try {
             console.log(`[Research] Tier 0: Using Google Custom Search API...`);
-            const googleUrl = `https://www.googleapis.com/customsearch/v1?key=${API_KEY}&cx=${CX}&q=${encodeURIComponent(keyword)}&hl=${language}&num=5`;
+            // gl=vn for more relevant local results in Vietnam
+            const geoParam = language === 'vi' ? '&gl=vn' : '&gl=us';
+            const googleUrl = `https://www.googleapis.com/customsearch/v1?key=${API_KEY}&cx=${CX}&q=${encodeURIComponent(keyword)}&hl=${language}${geoParam}&num=5`;
 
             const response = await fetch(googleUrl, { timeout: 10000 });
             const data = await response.json();
