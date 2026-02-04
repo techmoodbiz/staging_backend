@@ -78,8 +78,9 @@ ${skillContent}
 
 ### NHIỆM VỤ QUAN TRỌNG NHẤT (MANDATORY):
 1. Chỉ được báo cáo lỗi khi tìm thấy sự vi phạm trực tiếp đối với các quy tắc được cung cấp (Module 3: MarkRules hoặc Module 4: LegalRules).
-2. TRÍCH DẪN CHÍNH XÁC: Trường "citation" TUYỆT ĐỐI phải khớp 100% với TÊN của quy tắc được cung cấp (ví dụ: "MarkRule: Logic_01").
-3. CẤM BỊA ĐẶT: Nếu một vấn đề không vi phạm quy tắc cụ thể nào -> KHÔNG ĐƯỢC BÁO LỖI.
+2. ƯU TIÊN LEGAL: Nếu một lỗi vi phạm cả MarkRule và LegalRule, CHỈ báo cáo là 'legal'. Tuyệt đối không báo trùng lặp.
+3. TRÍCH DẪN CHÍNH XÁC: Trường "citation" TUYỆT ĐỐI phải khớp 100% với TÊN của quy tắc được cung cấp (ví dụ: "MarkRule: Logic_01").
+4. CẤM BỊA ĐẶT: Nếu một vấn đề không vi phạm quy tắc cụ thể nào -> KHÔNG ĐƯỢC BÁO LỖI.
 
 JSON Schema:
 {

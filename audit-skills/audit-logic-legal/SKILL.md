@@ -17,10 +17,13 @@ version: 1
 - Chỉ được báo lỗi khi tìm thấy sự vi phạm trực tiếp đối với các quy tắc được cung cấp.
 - Trích dẫn TUYỆT ĐỐI khớp với ID quy tắc (ví dụ: "MarkRule: Logic_01").
 
-### 2. Phân loại Severity
-- **High**: Vi phạm pháp lý, y tế, hoặc logic gây hiểu lầm nghiêm trọng.
-- **Medium**: Vi phạm SOP về phong cách trình bày logic.
-- **Low**: Các mâu thuẫn nhỏ không gây hậu quả lớn.
+### 2. Phân loại & Ưu tiên (Priority)
+- **Legal Rule (Ưu tiên Cao nhất)**: Các vi phạm về pháp lý, y tế, hoặc quy định nhà nước.
+- **Mark Rule (Logic)**: Các vi phạm về logic lập luận, SOP nội bộ.
+- **QUY TẮC ƯU TIÊN**: Nếu một đoạn văn vi phạm cả quy tắc Legal và Logic, **CHỈ ĐƯỢC báo cáo là lỗi Legal**. Không được báo trùng lặp lỗi.
+- **Severity**: 
+  - **High**: Mặc định cho mọi lỗi Legal.
+  - **Medium/Low**: Cho các lỗi Logic/SOP tùy mức độ.
 
 ### 3. Chính xác (Precision)
 - Không được bịa đặt lỗi nếu không tìm thấy quy tắc tương ứng trong SOP.
