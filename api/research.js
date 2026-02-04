@@ -29,80 +29,58 @@ const httpsAgent = new https.Agent({
 });
 
 /**
- * Stage 1: Search Extraction
- * Queries Google and returns top 5 organic links.
+ * Stage 1: Search Extraction (Pivot to DuckDuckGo)
+ * Google blocks most bot requests. DuckDuckGo HTML is much more reliable.
  */
-async function getTop5GoogleLinks(keyword, language = 'vi') {
-    // We use a mobile User-Agent which often has simpler HTML and fewer blocks.
-    // gbv=1 (Google Basic Version) is used for easier parsing.
-    const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(keyword)}&hl=${language}&gbv=1&num=10`;
+async function getTop5Links(keyword, language = 'vi') {
+    // We use DuckDuckGo HTML version which is very easy to scrape and reliable.
+    const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(keyword)}&kl=${language === 'vi' ? 'vn-vi' : 'us-en'}`;
 
     console.log(`[Research] Fetching: ${searchUrl}`);
 
     const response = await fetch(searchUrl, {
         headers: {
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': language === 'vi' ? 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7' : 'en-US,en;q=0.9',
-            // Attempt to bypass "Before you continue" cookie consent page
-            'Cookie': 'CONSENT=YES+cb.20230531-04-p0.en+FX+908; SOCS=CAISHAgBEhJnd3NfMjAyMzA4MzAtMF9SQzIaAnZpIAEaBgiA_LaoBg',
-            'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache'
         },
-        agent: httpsAgent,
         timeout: 10000
     });
 
     if (!response.ok) {
-        console.error(`[Research] Google Search HTTP Error: ${response.status}`);
-        throw new Error(`Google Search failed with status ${response.status}`);
+        console.error(`[Research] Search Service Error: ${response.status}`);
+        throw new Error(`Search service failed with status ${response.status}`);
     }
 
     const html = await response.text();
-
-    // Diagnostic log: check for common block patterns
-    if (html.includes('google.com/sorry/index') || html.includes('captcha')) {
-        console.error('[Research] DETECTED: Google CAPTCHA/Block page');
-        throw new Error("Google has temporarily blocked our requests (CAPTCHA). Please wait 15 min.");
-    }
-
     const { document } = parseHTML(html);
     const links = [];
 
-    // In mobile gbv=1, we look for all <a> tags that have a /url?q= prefix
-    const allLinks = Array.from(document.querySelectorAll('a'));
-    console.log(`[Research] Total anchors found: ${allLinks.length}`);
-    console.log(`[Research] Page Title: "${document.title}"`);
+    // DuckDuckGo HTML structure: <a class="result__a" href="...">Title</a>
+    const results = document.querySelectorAll('a.result__a');
+    console.log(`[Research] Found ${results.length} links on DuckDuckGo`);
 
-    for (const a of allLinks) {
+    for (const a of results) {
         if (links.length >= 5) break;
 
-        let href = a.getAttribute('href');
-        if (!href || !href.startsWith('/url?q=')) continue;
-
         const title = a.textContent?.trim();
-        if (title && title.length > 5 && !title.includes('Similar') && !title.includes('Cached')) {
-            try {
-                // Extract target URL from Google redirect
-                const urlParams = new URLSearchParams(href.split('?')[1]);
-                const targetUrl = urlParams.get('q');
+        let url = a.getAttribute('href');
 
-                if (targetUrl && targetUrl.startsWith('http') && !targetUrl.includes('google.com')) {
-                    if (!links.some(l => l.url === targetUrl)) {
-                        const cleanTitle = title.split(' › ')[0].split('...')[0].trim();
-                        links.push({ title: cleanTitle, url: targetUrl });
-                    }
+        if (url && title && title.length > 5) {
+            // DuckDuckGo sometimes uses a proxy link: //duckduckgo.com/l/?uddg=...
+            if (url.includes('uddg=')) {
+                try {
+                    const urlParams = new URLSearchParams(url.split('?')[1]);
+                    url = urlParams.get('uddg');
+                } catch (e) {
+                    // skip
                 }
-            } catch (e) {
-                // skip
             }
-        }
-    }
 
-    if (links.length === 0) {
-        console.warn('[Research] Search failed. Snippet of HTML body:', html.substring(0, 500).replace(/\n/g, ' '));
-        if (html.includes('Sign in') || html.includes('Đăng nhập')) {
-            throw new Error("Google is redirecting to a Sign-in page. This usually happens after too many requests.");
+            if (url && url.startsWith('http') && !url.includes('duckduckgo.com')) {
+                if (!links.some(l => l.url === url)) {
+                    links.push({ title, url });
+                }
+            }
         }
     }
 
@@ -182,10 +160,10 @@ export default async function handler(req, res) {
 
         console.log(`[Research] Starting search for: "${keyword}" (${language})`);
 
-        // 1. Get Top 5 Links
+        // 1. Get Top 5 Links (Now using DuckDuckGo)
         let links = [];
         try {
-            links = await getTop5GoogleLinks(keyword, language);
+            links = await getTop5Links(keyword, language);
         } catch (e) {
             console.error("Search failed:", e);
             return res.status(500).json({ error: e.message || "Failed to fetch search results" });
@@ -247,8 +225,8 @@ ${combinedMarkdown.substring(0, 30000)}
         if (usage.totalTokenCount > 0) {
             try {
                 await db.collection('users').doc(uid).update({
-                    'usageStats.totalTokens': admin.firestore.FieldValue.increment(usage.totalTokenCount),
-                    'usageStats.requestCount': admin.firestore.FieldValue.increment(1),
+                    'usageStats.totalTokens': admin.firestore.increment(usage.totalTokenCount),
+                    'usageStats.requestCount': admin.firestore.increment(1),
                     'usageStats.lastActiveAt': admin.firestore.FieldValue.serverTimestamp()
                 });
             } catch (e) {
