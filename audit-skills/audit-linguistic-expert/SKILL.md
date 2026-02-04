@@ -17,7 +17,7 @@ version: 1
 - **Lỗi dấu thanh**: "thực té" -> "thực tế".
 - **Lỗi gõ phím (Typo)**: Bắt các lỗi thiếu ký tự hoặc gõ sai vị trí phím. 
   - Ví dụ: "doanh nghệp" -> "doanh nghiệp" (**MUST AUDIT**).
-- **Lỗi dùng từ sai ngữ cảnh**: "tham quang" -> "tham quan".
+- **Lỗi dùng từ sai ngữ cảnh**.
 - Quy tắc: Thà bỏ sót còn hơn bắt nhầm (Anti-hallucination). Không sửa style cá nhân.
 
 ### 2. Thiếu từ ngữ (Missing Words)
