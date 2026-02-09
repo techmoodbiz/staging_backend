@@ -63,7 +63,7 @@ async function getTop5Links(keyword, language = 'vi') {
                     url: item.link
                 }));
                 console.log(`[Research] Google API found ${links.length} links.`);
-                return links;
+                return { links, tokens: 0, provider: 'google' };
             } else if (data.error) {
                 console.warn(`[Research] Google API returned error: ${data.error.message}`);
             }
@@ -78,38 +78,20 @@ async function getTop5Links(keyword, language = 'vi') {
     try {
         console.log(`[Research] Tier 1: Falling back to Jina AI Search...`);
         const jinaUrl = `https://s.jina.ai/${encodeURIComponent(keyword)}`;
-
-        // Diagnostic: Check if JINA_API_KEY is present
         const jinaKey = process.env.JINA_API_KEY;
-        console.log(`[Research] Jina API Key status: ${jinaKey ? 'Present (ending in ' + jinaKey.slice(-4) + ')' : 'MISSING'}`);
+        const headers = { 'Accept': 'application/json', 'X-With-Links-Summary': 'true', 'X-No-Cache': 'true' };
+        if (jinaKey) headers['Authorization'] = `Bearer ${jinaKey.trim()}`;
 
-        const headers = {
-            'Accept': 'application/json',
-            'X-With-Links-Summary': 'true',
-            'X-No-Cache': 'true'
-        };
-
-        if (jinaKey) {
-            headers['Authorization'] = `Bearer ${jinaKey.trim()}`;
-        }
-
-        // Increased timeout to 30s for Jina Search
         const response = await fetch(jinaUrl, { headers, timeout: 30000 });
-        console.log(`[Research] Jina AI Search Status: ${response.status}`);
-
         if (response.ok) {
             const data = await response.json();
             if (data && data.data && data.data.length > 0) {
-                const links = data.data.slice(0, 5).map(item => ({
-                    title: item.title,
-                    url: item.url
-                }));
-                console.log(`[Research] Jina AI found ${links.length} links.`);
-                return links;
+                const links = data.data.slice(0, 5).map(item => ({ title: item.title, url: item.url }));
+                // Jina Search returns tokens in usage object
+                const tokens = data.usage?.tokens || 10000;
+                console.log(`[Research] Jina AI found ${links.length} links. Tokens: ${tokens}`);
+                return { links, tokens, provider: 'jina_search' };
             }
-        } else {
-            const errorText = await response.text();
-            console.error(`[Research] Jina AI Search Error (${response.status}): ${errorText.substring(0, 300)}`);
         }
     } catch (e) {
         console.warn(`[Research] Jina AI Search failed:`, e.message);
@@ -161,7 +143,7 @@ async function getTop5Links(keyword, language = 'vi') {
                     }
                 }
             }
-            if (links.length > 0) return links;
+            if (links.length > 0) return { links, tokens: 0, provider: 'ddg' };
         }
     } catch (e) {
         console.warn(`[Research] DuckDuckGo fallback failed:`, e.message);
@@ -177,16 +159,16 @@ async function scrapeUrlTiered(url) {
     // --- TIER 1: Jina Reader ---
     try {
         const jinaReaderUrl = `https://r.jina.ai/${url}`;
-        const headers = { 'X-Return-Format': 'markdown' };
-        if (process.env.JINA_API_KEY) {
-            headers['Authorization'] = `Bearer ${process.env.JINA_API_KEY}`;
-        }
+        const headers = { 'X-Return-Format': 'markdown', 'Accept': 'application/json' };
+        if (process.env.JINA_API_KEY) headers['Authorization'] = `Bearer ${process.env.JINA_API_KEY}`;
 
         const response = await fetch(jinaReaderUrl, { headers, timeout: 15000 });
         if (response.ok) {
-            const markdown = await response.text();
+            const data = await response.json();
+            const markdown = data.data?.content || "";
+            const tokens = data.data?.usage?.tokens || 0;
             if (markdown && markdown.length > 200) {
-                return { content: markdown, url };
+                return { content: markdown, url, tokens, provider: 'jina_reader' };
             }
         }
     } catch (e) {
@@ -254,8 +236,14 @@ export default async function handler(req, res) {
             }
         }
 
+        let totalJinaSearchTokens = 0;
+        let totalJinaReaderTokens = 0;
+        let totalGeminiAnalysisTokens = 0;
+
         // --- STAGE 1: SEARCH ---
-        const links = await getTop5Links(keyword, language);
+        const searchResult = await getTop5Links(keyword, language);
+        const links = searchResult.links;
+        if (searchResult.provider === 'jina_search') totalJinaSearchTokens += searchResult.tokens;
 
         // --- STAGE 2: SEQUENTIAL SCRAPE ---
         const successfulScrapes = [];
@@ -264,6 +252,7 @@ export default async function handler(req, res) {
             const result = await scrapeUrlTiered(link.url);
             if (result) {
                 successfulScrapes.push({ ...result, title: link.title });
+                if (result.provider === 'jina_reader') totalJinaReaderTokens += result.tokens;
             }
             await sleep(1500); // 1.5s delay
         }
@@ -319,16 +308,36 @@ ${combinedContext.substring(0, 30000)}
 
         const result = await model.generateContent(prompt);
         const analysis = result.response.text();
+        if (result.response.usageMetadata) totalGeminiAnalysisTokens = result.response.usageMetadata.totalTokenCount || 0;
 
         const finalResult = {
             success: true,
             keyword,
             analysis,
             sources: successfulScrapes.map(s => ({ title: s.title, url: s.url })),
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            usage: {
+                jinaSearch: totalJinaSearchTokens,
+                jinaReader: totalJinaReaderTokens,
+                geminiAnalysis: totalGeminiAnalysisTokens
+            }
         };
 
-        // --- STAGE 4: CACHE ---
+        // --- STAGE 4: LOG USAGE (ASYNC) ---
+        if (uid) {
+            try {
+                const { logTokenUsage } = await import('../tokenLogger.js');
+                const logPromises = [];
+                if (totalJinaSearchTokens > 0) logPromises.push(logTokenUsage(uid, 'RESEARCH_JINA_SEARCH', totalJinaSearchTokens, { keyword }));
+                if (totalJinaReaderTokens > 0) logPromises.push(logTokenUsage(uid, 'RESEARCH_JINA_READER', totalJinaReaderTokens, { keyword }));
+                if (totalGeminiAnalysisTokens > 0) logPromises.push(logTokenUsage(uid, 'RESEARCH_ANALYSIS_GEMINI', totalGeminiAnalysisTokens, { keyword }));
+                await Promise.all(logPromises);
+            } catch (e) {
+                console.error("Failed to log research usage:", e);
+            }
+        }
+
+        // --- STAGE 5: CACHE ---
         await db.collection('research_cache').doc(cacheKey).set(finalResult);
 
         return res.status(200).json(finalResult);
