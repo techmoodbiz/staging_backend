@@ -220,10 +220,10 @@ export default async function handler(req, res) {
     } catch (error) { return res.status(401).json({ error: 'Unauthorized' }); }
 
     try {
-        const { keyword, language = 'vi' } = req.body;
+        const { keyword, urls, language = 'vi' } = req.body;
         if (!keyword) return res.status(400).json({ error: 'Keyword is required' });
 
-        const cacheKey = `${keyword}_${language}`.toLowerCase();
+        const cacheKey = `${keyword}_${language}_${(urls || []).join('_')}`.toLowerCase();
 
         // --- STAGE 0: CACHING ---
         const cacheDoc = await db.collection('research_cache').doc(cacheKey).get();
@@ -240,10 +240,20 @@ export default async function handler(req, res) {
         let totalJinaReaderTokens = 0;
         let totalGeminiAnalysisTokens = 0;
 
-        // --- STAGE 1: SEARCH ---
-        const searchResult = await getTop5Links(keyword, language);
-        const links = searchResult.links;
-        if (searchResult.provider === 'jina_search') totalJinaSearchTokens += searchResult.tokens;
+        let links = [];
+        let provider = 'manual';
+
+        // --- STAGE 1: SEARCH OR MANUAL URLS ---
+        if (urls && Array.isArray(urls) && urls.length > 0) {
+            console.log(`[Research] Using ${urls.length} manual URLs for: "${keyword}"`);
+            links = urls.slice(0, 5).map(u => ({ title: 'User Provided Source', url: u }));
+        } else {
+            console.log(`[Research] Starting Official API search for: "${keyword}"`);
+            const searchResult = await getTop5Links(keyword, language);
+            links = searchResult.links;
+            provider = searchResult.provider;
+            if (provider === 'jina_search') totalJinaSearchTokens += searchResult.tokens;
+        }
 
         // --- STAGE 2: SEQUENTIAL SCRAPE ---
         const successfulScrapes = [];
