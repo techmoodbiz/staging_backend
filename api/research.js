@@ -5,6 +5,7 @@ import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
 import https from 'https';
 import admin from 'firebase-admin';
+import crypto from 'node:crypto';
 
 // Initialize Firebase Admin
 if (!admin.apps.length) {
@@ -223,7 +224,8 @@ export default async function handler(req, res) {
         const { keyword, urls, language = 'vi' } = req.body;
         if (!keyword) return res.status(400).json({ error: 'Keyword is required' });
 
-        const cacheKey = `${keyword}_${language}_${(urls || []).join('_')}`.toLowerCase();
+        const rawCacheKey = `${keyword}_${language}_${(urls || []).join('_')}`.toLowerCase();
+        const cacheKey = crypto.createHash('sha256').update(rawCacheKey).digest('hex');
 
         // --- STAGE 0: CACHING ---
         const cacheDoc = await db.collection('research_cache').doc(cacheKey).get();
