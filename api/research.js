@@ -39,121 +39,6 @@ const USER_AGENTS = [
 ];
 
 /**
- * Official Search Extraction (Google Custom Search API)
- */
-async function getTop5Links(keyword, language = 'vi') {
-    console.log(`[Research] Starting Official API search for: "${keyword}"`);
-
-    const API_KEY = process.env.GOOGLE_SEARCH_API_KEY;
-    const CX = process.env.GOOGLE_SEARCH_CX;
-
-    // --- TIER 0: Google Custom Search API ---
-    if (API_KEY && CX) {
-        try {
-            console.log(`[Research] Tier 0: Using Google Custom Search API...`);
-            // gl=vn for more relevant local results in Vietnam
-            const geoParam = language === 'vi' ? '&gl=vn' : '&gl=us';
-            const googleUrl = `https://www.googleapis.com/customsearch/v1?key=${API_KEY}&cx=${CX}&q=${encodeURIComponent(keyword)}&hl=${language}${geoParam}&num=5`;
-
-            const response = await fetch(googleUrl, { timeout: 10000 });
-            const data = await response.json();
-
-            if (response.ok && data.items && data.items.length > 0) {
-                const links = data.items.map(item => ({
-                    title: item.title,
-                    url: item.link
-                }));
-                console.log(`[Research] Google API found ${links.length} links.`);
-                return { links, tokens: 0, provider: 'google' };
-            } else if (data.error) {
-                console.warn(`[Research] Google API returned error: ${data.error.message}`);
-            }
-        } catch (e) {
-            console.warn(`[Research] Google Custom Search API failed:`, e.message);
-        }
-    } else {
-        console.warn(`[Research] Google Custom Search API credentials missing (GOOGLE_SEARCH_API_KEY or GOOGLE_SEARCH_CX).`);
-    }
-
-    // --- TIER 1: Jina AI Search Fallback ---
-    try {
-        console.log(`[Research] Tier 1: Falling back to Jina AI Search...`);
-        const jinaUrl = `https://s.jina.ai/${encodeURIComponent(keyword)}`;
-        const jinaKey = process.env.JINA_API_KEY;
-        const headers = { 'Accept': 'application/json', 'X-With-Links-Summary': 'true', 'X-No-Cache': 'true' };
-        if (jinaKey) headers['Authorization'] = `Bearer ${jinaKey.trim()}`;
-
-        const response = await fetch(jinaUrl, { headers, timeout: 30000 });
-        if (response.ok) {
-            const data = await response.json();
-            if (data && data.data && data.data.length > 0) {
-                const links = data.data.slice(0, 5).map(item => ({ title: item.title, url: item.url }));
-                // Jina Search returns tokens in usage object
-                const tokens = data.usage?.tokens || 10000;
-                console.log(`[Research] Jina AI found ${links.length} links. Tokens: ${tokens}`);
-                return { links, tokens, provider: 'jina_search' };
-            }
-        }
-    } catch (e) {
-        console.warn(`[Research] Jina AI Search failed:`, e.message);
-    }
-
-    // --- TIER 2: DuckDuckGo Lite Fallback ---
-    try {
-        console.log(`[Research] Tier 2: Falling back to DuckDuckGo Lite...`);
-        const ddgUrl = `https://duckduckgo.com/lite/?q=${encodeURIComponent(keyword)}&kl=${language === 'vi' ? 'vn-vi' : 'us-en'}`;
-        const response = await fetch(ddgUrl, {
-            headers: {
-                'User-Agent': USER_AGENTS[0],
-                'Accept': 'text/html'
-            },
-            timeout: 15000
-        });
-
-        console.log(`[Research] DDG Lite Status: ${response.status}`);
-
-        if (response.ok) {
-            const html = await response.text();
-            const { document } = parseHTML(html);
-
-            // Try different selectors for DDG Lite
-            let anchors = Array.from(document.querySelectorAll('a.result-link'));
-            if (anchors.length === 0) {
-                // Lite version often has links in tables
-                anchors = Array.from(document.querySelectorAll('td a[rel="nofollow"]'));
-            }
-            if (anchors.length === 0) {
-                anchors = Array.from(document.querySelectorAll('a')).filter(a => {
-                    const href = a.getAttribute('href');
-                    return href && href.startsWith('http') && !href.includes('duckduckgo.com');
-                });
-            }
-
-            console.log(`[Research] DDG Lite found ${anchors.length} potential links`);
-
-            const links = [];
-            for (const a of anchors) {
-                if (links.length >= 5) break;
-                let url = a.getAttribute('href');
-                let title = a.textContent?.trim();
-
-                if (url && url.startsWith('http')) {
-                    // Filter out non-content titles if possible
-                    if (title && title.length > 5) {
-                        links.push({ title, url });
-                    }
-                }
-            }
-            if (links.length > 0) return { links, tokens: 0, provider: 'ddg' };
-        }
-    } catch (e) {
-        console.warn(`[Research] DuckDuckGo fallback failed:`, e.message);
-    }
-
-    throw new Error("Không tìm thấy kết quả tìm kiếm nào phù hợp qua API hoặc các nguồn dự phòng.");
-}
-
-/**
  * Tiered Content Scraping (Sequential with Delay)
  */
 async function scrapeUrlTiered(url) {
@@ -222,9 +107,13 @@ export default async function handler(req, res) {
 
     try {
         const { keyword, urls, language = 'vi' } = req.body;
-        if (!keyword) return res.status(400).json({ error: 'Keyword is required' });
 
-        const rawCacheKey = `${keyword}_${language}_${(urls || []).join('_')}`.toLowerCase();
+        // URLs are now mandatory
+        if (!urls || !Array.isArray(urls) || urls.length === 0) {
+            return res.status(400).json({ error: 'Vui lòng cung cấp ít nhất 1 URL để phân tích.' });
+        }
+
+        const rawCacheKey = `${keyword || ''}_${language}_${urls.join('_')}`.toLowerCase();
         const cacheKey = crypto.createHash('sha256').update(rawCacheKey).digest('hex');
 
         // --- STAGE 0: CACHING ---
@@ -233,29 +122,17 @@ export default async function handler(req, res) {
             const data = cacheDoc.data();
             const ageHours = (Date.now() - data.timestamp) / (1000 * 60 * 60);
             if (ageHours < 24) {
-                console.log(`[Research] Cache HIT for: ${keyword}`);
+                console.log(`[Research] Cache HIT for: ${keyword || urls[0]}`);
                 return res.status(200).json({ ...data, cached: true });
             }
         }
 
-        let totalJinaSearchTokens = 0;
         let totalJinaReaderTokens = 0;
         let totalGeminiAnalysisTokens = 0;
 
-        let links = [];
-        let provider = 'manual';
-
-        // --- STAGE 1: SEARCH OR MANUAL URLS ---
-        if (urls && Array.isArray(urls) && urls.length > 0) {
-            console.log(`[Research] Using ${urls.length} manual URLs for: "${keyword}"`);
-            links = urls.slice(0, 5).map(u => ({ title: 'User Provided Source', url: u }));
-        } else {
-            console.log(`[Research] Starting Official API search for: "${keyword}"`);
-            const searchResult = await getTop5Links(keyword, language);
-            links = searchResult.links;
-            provider = searchResult.provider;
-            if (provider === 'jina_search') totalJinaSearchTokens += searchResult.tokens;
-        }
+        // --- STAGE 1: USE PROVIDED URLs DIRECTLY ---
+        const links = urls.slice(0, 5).map(u => ({ title: 'User Provided Source', url: u }));
+        console.log(`[Research] Using ${links.length} user-provided URLs.`);
 
         // --- STAGE 2: SEQUENTIAL SCRAPE ---
         const successfulScrapes = [];
@@ -266,11 +143,11 @@ export default async function handler(req, res) {
                 successfulScrapes.push({ ...result, title: link.title });
                 if (result.provider === 'jina_reader') totalJinaReaderTokens += result.tokens;
             }
-            await sleep(1500); // 1.5s delay
+            await sleep(1500); // 1.5s delay to avoid rate limits
         }
 
         if (successfulScrapes.length === 0) {
-            return res.status(404).json({ error: "Không thể trích xuất nội dung từ các nguồn tìm được." });
+            return res.status(404).json({ error: "Không thể trích xuất nội dung từ các URL đã cung cấp. Vui lòng kiểm tra lại các đường dẫn." });
         }
 
         // --- STAGE 3: GEMINI ANALYSIS ---
@@ -280,32 +157,35 @@ export default async function handler(req, res) {
 
         const combinedContext = successfulScrapes.map((s, i) => `--- SOURCE ${i + 1}: ${s.title} (${s.url}) ---\n${s.content}`).join('\n\n');
 
+        const topicContext = keyword ? `Topic / Chủ đề phân tích: "${keyword}"` : `Phân tích nội dung từ ${successfulScrapes.length} nguồn được cung cấp.`;
+
         const prompt = `
 Role: Senior Strategy & Research consultant.
-Task: Provide a "Premium Research Brief" for: "${keyword}".
+Task: Provide a "Premium Research Brief" based on the content scraped from the provided URLs.
+${topicContext}
 Language: ${language === 'vi' ? 'Tiếng Việt' : 'English'}.
 
 REQUIRED STRUCTURE (Use these exact Markdown patterns):
 
 # 🎯 Executive Summary
-[A concise high-level overview of the topic]
+[A concise high-level overview of the topic based on the provided sources]
 
 ## 💎 Core Themes & Key Topics
 - **[Topic Name]**: [Description with data points]
 - **[Topic Name]**: [Description with data points]
 
-## 📊 Competitor Content Structure
-[Explain how top results are organized. What are their winning headers/styles?]
+## 📊 Content Structure Analysis
+[Explain how the provided sources are organized. What are their winning headers/styles/approaches?]
 
 ## 🚩 Content Gaps (Strategic Opportunity)
 > [!IMPORTANT]
-> This is your competitive edge. Identify what the top 5 sources MISSED or could explain better.
+> This is your competitive edge. Identify what the provided sources MISSED or could explain better.
 
 ## 📈 Key Statistics & Insights
 - [List 3-5 specific numbers, percentages, or high-impact facts found]
 
 ## 💡 Content Generation Tips
-[How should the user approach writing about this topic to rank higher?]
+[How should the user approach writing about this topic to stand out?]
 
 Formatting Rules:
 1. Use **bold** for emphasis on key terms.
@@ -324,12 +204,11 @@ ${combinedContext.substring(0, 30000)}
 
         const finalResult = {
             success: true,
-            keyword,
+            keyword: keyword || '',
             analysis,
             sources: successfulScrapes.map(s => ({ title: s.title, url: s.url })),
             timestamp: Date.now(),
             usage: {
-                jinaSearch: totalJinaSearchTokens,
                 jinaReader: totalJinaReaderTokens,
                 geminiAnalysis: totalGeminiAnalysisTokens
             }
@@ -340,7 +219,6 @@ ${combinedContext.substring(0, 30000)}
             try {
                 const { logTokenUsage } = await import('../tokenLogger.js');
                 const logPromises = [];
-                if (totalJinaSearchTokens > 0) logPromises.push(logTokenUsage(uid, 'RESEARCH_JINA_SEARCH', totalJinaSearchTokens, { keyword }));
                 if (totalJinaReaderTokens > 0) logPromises.push(logTokenUsage(uid, 'RESEARCH_JINA_READER', totalJinaReaderTokens, { keyword }));
                 if (totalGeminiAnalysisTokens > 0) logPromises.push(logTokenUsage(uid, 'RESEARCH_ANALYSIS_GEMINI', totalGeminiAnalysisTokens, { keyword }));
                 await Promise.all(logPromises);
