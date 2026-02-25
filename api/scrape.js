@@ -292,21 +292,22 @@ export default async function handler(req, res) {
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
         const prompt = `
-Role: Web Content Auditor & Extractor.
-Task: Perfect the Markdown structure of the scraped article for a high-quality audit.
+Role: Web Content Extractor for AI Linguistic & Logic Auditor.
+Task: Extract "CLEAN TEXT" from the scraped content to be analyzed by an AI auditor.
 
 Context Info:
 - Original Title: ${metadata.title}
 - Description: ${metadata.description}
 
-Instructions:
-1. Ensure the Markdown is clean and logically structured.
-2. PRESERVE all headers (H1, H2, H3), lists, and important links.
-3. Remove any remaining "noise" (e.g., social sharing text, navigation fragments, ads).
-4. Do NOT change the meaning or rewrite the facts; only optimize formatting and clarity.
-5. If there are tables or lists, ensure they are formatted correctly in Markdown.
+Instructions (MANDATORY):
+1. PRODUCE CLEAN TEXT: Remove all Markdown noise (e.g., [Links](url), **bold**, *italic*, etc.).
+2. STRUCTURE: Use simple, plain text organization. Use newlines and basic indentation for lists.
+3. HEADERS: Keep headings but represent them as PLAIN TEXT (e.g., "SECTION TITLE" instead of "# SECTION TITLE"). 
+4. REMOVE NOISE: Strip away all social sharing fragments, navigation blocks, cookie notices, and interface text.
+5. NO REWRITING: Do NOT change the meaning, vocabulary, or facts. Only clean up formatting and noise.
+6. GOAL: The output should look like a clean, readable text document, not a web page.
 
-Raw Scraped Content (Markdown):
+Raw Scraped Content:
 """
 ${finalContent.substring(0, 35000)}
 """
