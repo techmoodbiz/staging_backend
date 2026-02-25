@@ -51,13 +51,12 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { constructedPrompt, text, language } = req.body;
+    const { constructedPrompt, text, language, platform } = req.body;
     const errors = [];
     // Split token tracking
     let tokensLogic = 0;
     let tokensBrand = 0;
     let tokensLang = 0;
-    // let totalTokensUsed = 0; // Removed aggregate counter
 
     // --- 1. LOGIC & LEGAL STREAM (DeepSeek) ---
     const logicLegalPromise = (async () => {
@@ -76,11 +75,24 @@ Base your auditing on the following skill definition:
 
 ${skillContent}
 
+### CONTEXT:
+- Platform: ${platform || 'General'}
+- Language: ${language || 'Vietnamese'}
+
 ### NHIỆM VỤ QUAN TRỌNG NHẤT (MANDATORY):
 1. Chỉ được báo cáo lỗi khi tìm thấy sự vi phạm trực tiếp đối với các quy tắc được cung cấp (Module 3: MarkRules hoặc Module 4: LegalRules).
 2. ƯU TIÊN LEGAL: Nếu một lỗi vi phạm cả MarkRule và LegalRule, CHỈ báo cáo là 'legal'. Tuyệt đối không báo trùng lặp.
-3. TRÍCH DẪN CHÍNH XÁC: Trường "citation" TUYỆT ĐỐI phải khớp 100% với TÊN của quy tắc được cung cấp (ví dụ: "MarkRule: Logic_01").
+3. TRÍCH DẪN CHÍNH XÁC: Trường "citation" phải khớp TÊN quy tắc (ví dụ: "MarkRule: Logic_01"). Đối với Legal Red Flags (mục 4 trong SKILL), dùng citation "Legal Red Flag: [Tên lỗi]".
 4. CẤM BỊA ĐẶT: Nếu một vấn đề không vi phạm quy tắc cụ thể nào -> KHÔNG ĐƯỢC BÁO LỖI.
+5. LEGAL RED FLAGS: Các lỗi trong mục 4 của SKILL (superlatives, cam kết tuyệt đối, tuyên bố y tế, so sánh đối thủ) LUÔN ĐƯỢC KIỂM TRA bất kể có LegalRule hay không.
+
+### CHAIN-OF-THOUGHT:
+Trước khi đưa ra kết luận, hãy:
+1. Đọc toàn bộ văn bản để hiểu ngữ cảnh.
+2. Liệt kê các tuyên bố quan trọng (claims) trong văn bản.
+3. So sánh chéo các tuyên bố để tìm mâu thuẫn nội bộ.
+4. Kiểm tra từng tuyên bố với các quy tắc SOP và Legal Red Flags.
+5. Chỉ báo cáo lỗi nếu chắc chắn >= 90%.
 
 JSON Schema:
 {
@@ -89,7 +101,7 @@ JSON Schema:
     {
        "category": "ai_logic" | "legal",
        "problematic_text": "đoạn văn vi phạm",
-       "citation": "Tên chính xác sau dấu '### MarkRule:' hoặc '### LegalRule:'",
+       "citation": "Tên chính xác sau dấu '### MarkRule:' hoặc '### LegalRule:' hoặc 'Legal Red Flag: [Tên]'",
        "reason": "Giải thích chi tiết lỗi dựa trên SOP (Tiếng Việt)",
        "severity": "High" | "Medium" | "Low",
        "suggestion": "Gợi ý sửa đổi phù hợp"
@@ -165,7 +177,17 @@ ${skillContent}
 
 ### CURRENT CONTEXT:
 - PRODUCT_AUDIT_ENABLED: ${hasProductData ? "YES" : "NO"}
+- Platform: ${platform || 'General'}
+- Language: ${language || 'Vietnamese'}
 - If PRODUCT_AUDIT_ENABLED is NO, skip all product specification checks and focus ONLY on Brand Tone & Style.
+
+### CHAIN-OF-THOUGHT:
+Trước khi đưa ra kết luận, hãy:
+1. Xác định Brand Personality và Tone of Voice từ dữ liệu cung cấp.
+2. Đọc toàn bộ văn bản, đánh giá tone tổng thể.
+3. Kiểm tra sự nhất quán tone từ đầu đến cuối (Tone Drift detection).
+4. Kiểm tra từng forbidden word và biến thể của chúng.
+5. Nếu PRODUCT_AUDIT_ENABLED = YES, so sánh từng tuyên bố sản phẩm với Product Info.
 
 JSON Output Only.
 Summary / Reason in Vietnamese. Suggestion in ${language || 'Vietnamese'}.
@@ -229,10 +251,13 @@ Base your auditing on the following skill definition:
 ${skillContent}
 
 ### ADDITIONAL CONTEXT:
-        - Target Language: ${targetLang}
-        - Strategy: SIÊU BẢO THỦ(Anti - hallucination).Only audit objective errors.
+- Target Language: ${targetLang}
+- Platform: ${platform || 'General'}
+- Strategy: SIÊU BẢO THỦ (Anti-hallucination). Only audit objective errors.
+- Platform Rules: Áp dụng quy tắc platform-specific từ mục 4 trong SKILL definition.
+  Ví dụ: Nếu platform là Facebook, emoji là chấp nhận được. Nếu platform là Email, emoji là lỗi.
 
-JSON Output Only.Summary / Reason in Vietnamese.Suggestion in the text's original language.
+JSON Output Only. Summary / Reason in Vietnamese. Suggestion in the text's original language.
 `;
         const model = genAI.getGenerativeModel({
           model: 'gemini-2.0-flash',
