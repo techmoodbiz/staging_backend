@@ -125,14 +125,15 @@ async function handleAnalytics(req, res, url) {
   try {
     const GA4_DATASET = process.env.GA4_DATASET_ID;
     const GSC_DATASET = process.env.GSC_DATASET_ID;
+    const PROJECT_ID = process.env.FIREBASE_PROJECT_ID;
 
-    if (!GA4_DATASET || !GSC_DATASET) {
-      return res.status(500).json({ error: 'Backend missing GA4_DATASET_ID or GSC_DATASET_ID configuration.' });
-    }
+    if (!GA4_DATASET) return res.status(200).json({ success: false, error: 'Thiếu cấu hình GA4_DATASET_ID trên Vercel.' });
+    if (!GSC_DATASET) return res.status(200).json({ success: false, error: 'Thiếu cấu hình GSC_DATASET_ID trên Vercel.' });
+    if (!PROJECT_ID) return res.status(200).json({ success: false, error: 'Thiếu cấu hình FIREBASE_PROJECT_ID trên Vercel.' });
 
     const ga4Query = `
       SELECT count(*) as pageviews
-      FROM \`${process.env.FIREBASE_PROJECT_ID}.${GA4_DATASET}.events_*\`
+      FROM \`${PROJECT_ID}.${GA4_DATASET}.events_*\`
       WHERE event_name = 'page_view'
       AND (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'page_location') = @url
       AND _TABLE_SUFFIX BETWEEN FORMAT_DATE('%Y%m%d', DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY))
@@ -141,29 +142,41 @@ async function handleAnalytics(req, res, url) {
 
     const gscQuery = `
       SELECT sum(clicks) as clicks, sum(impressions) as impressions, avg(position) as avg_position
-      FROM \`${process.env.FIREBASE_PROJECT_ID}.${GSC_DATASET}.searchdata_url_impressions\`
+      FROM \`${PROJECT_ID}.${GSC_DATASET}.searchdata_url_impressions\`
       WHERE url = @url
       AND data_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
     `;
 
-    const [ga4Task, gscTask] = await Promise.all([
-        bigquery.query({ query: ga4Query, params: { url } }),
-        bigquery.query({ query: gscQuery, params: { url } })
-    ]);
+    // Chúng ta dùng try-catch riêng cho từng query để bắt lỗi "Bảng chưa tồn tại"
+    let pageviews = 0;
+    let gscResults = { clicks: 0, impressions: 0, avg_position: 0 };
 
-    const pageviews = ga4Task[0][0]?.pageviews || 0;
-    const gscResults = gscTask[0][0] || { clicks: 0, impressions: 0, avg_position: 0 };
+    try {
+        const [ga4Task] = await bigquery.query({ query: ga4Query, params: { url } });
+        pageviews = ga4Task[0]?.pageviews || 0;
+    } catch (e) {
+        console.warn('GA4 Dataset/Table might not be ready yet:', e.message);
+    }
+
+    try {
+        const [gscTask] = await bigquery.query({ query: gscQuery, params: { url } });
+        gscResults = gscTask[0] || gscResults;
+    } catch (e) {
+        console.warn('GSC Dataset/Table might not be ready yet:', e.message);
+    }
 
     return res.status(200).json({
       success: true,
       data: {
         pageviews,
-        clicks: gscResults.clicks,
-        impressions: gscResults.impressions,
+        clicks: gscResults.clicks || 0,
+        impressions: gscResults.impressions || 0,
         avgPosition: gscResults.avg_position ? Number(gscResults.avg_position.toFixed(2)) : 0
       }
     });
+
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    console.error('Lỗi handleAnalytics tổng quát:', error);
+    return res.status(500).json({ error: 'Lỗi truy vấn BigQuery: ' + error.message });
   }
 }
