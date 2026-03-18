@@ -38,11 +38,13 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: 'Unauthorized: Missing or invalid token' });
   }
   const token = authHeader.split('Bearer ')[1];
+  let decodedToken;
   try {
-    await admin.auth().verifyIdToken(token);
+    decodedToken = await admin.auth().verifyIdToken(token);
   } catch (error) {
     return res.status(401).json({ error: 'Unauthorized: Token verification failed' });
   }
+  const userId = decodedToken.uid;
   // -------------------------
 
   try {
@@ -104,6 +106,26 @@ export default async function handler(req, res) {
       indexability: resultItem.is_indexable ? 'index' : 'noindex', 
       rawProviderResponse: resultItem // optional raw data
     };
+
+    // Save core metrics to Firestore for History/Logging
+    try {
+        const db = admin.firestore();
+        const docData = {
+            url: formattedResponse.url,
+            statusCode: formattedResponse.statusCode,
+            title: formattedResponse.title,
+            metaDescription: formattedResponse.metaDescription,
+            h1: formattedResponse.h1,
+            canonical: formattedResponse.canonical,
+            wordCount: formattedResponse.wordCount,
+            indexability: formattedResponse.indexability,
+            userId: userId,
+            createdAt: admin.firestore.FieldValue.serverTimestamp()
+        };
+        await db.collection('seo_inspections').add(docData);
+    } catch (fsError) {
+        console.error('Lỗi lưu lịch sử vào Firestore:', fsError);
+    }
 
     return res.status(200).json({
         success: true,
