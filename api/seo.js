@@ -156,14 +156,14 @@ async function handleAnalytics(req, res, url) {
     let gscResults = { clicks: 0, impressions: 0, avg_position: 0 };
 
     try {
-        const [ga4Task] = await bigquery.query({ query: ga4Query, params: { url } });
+        const [ga4Task] = await bigquery.query({ query: ga4Query, params: { url }, location: bqLocation });
         pageviews = ga4Task[0]?.pageviews || 0;
     } catch (e) {
         console.warn('GA4 Dataset/Table might not be ready yet:', e.message);
     }
 
     try {
-        const [gscTask] = await bigquery.query({ query: gscQuery, params: { url } });
+        const [gscTask] = await bigquery.query({ query: gscQuery, params: { url }, location: bqLocation });
         gscResults = gscTask[0] || gscResults;
     } catch (e) {
         console.warn('GSC Dataset/Table might not be ready yet:', e.message);
