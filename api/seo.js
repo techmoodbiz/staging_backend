@@ -19,6 +19,7 @@ if (!admin.apps.length) {
 
 const bigquery = new BigQuery({
   projectId: process.env.FIREBASE_PROJECT_ID,
+  location: process.env.BIGQUERY_LOCATION || 'asia-southeast1',
   credentials: {
     client_email: process.env.FIREBASE_CLIENT_EMAIL,
     private_key: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
