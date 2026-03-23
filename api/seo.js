@@ -17,9 +17,12 @@ if (!admin.apps.length) {
   }
 }
 
+const bqLocation = process.env.BIGQUERY_LOCATION || 'asia-southeast1';
+console.log('BigQuery Location:', bqLocation);
+
 const bigquery = new BigQuery({
   projectId: process.env.FIREBASE_PROJECT_ID,
-  location: process.env.BIGQUERY_LOCATION || 'asia-southeast1',
+  location: bqLocation,
   credentials: {
     client_email: process.env.FIREBASE_CLIENT_EMAIL,
     private_key: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
