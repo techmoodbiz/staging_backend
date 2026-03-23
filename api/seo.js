@@ -53,15 +53,62 @@ export default async function handler(req, res) {
   const userId = decodedToken.uid;
 
   const { url, action } = req.body;
-  if (!url) return res.status(400).json({ error: 'URL is required' });
+  if (!url && action !== 'diagnostic') return res.status(400).json({ error: 'URL is required' });
 
   // ROUTING BASED ON ACTION
   if (action === 'analytics') {
     return handleAnalytics(req, res, url);
+  } else if (action === 'diagnostic') {
+    return handleDiagnostic(req, res);
   } else {
     // Default to technical analysis
     return handleTechnical(req, res, url, userId);
   }
+}
+
+async function handleDiagnostic(req, res) {
+  const GA4_DATASET = process.env.GA4_DATASET_ID;
+  const GSC_DATASET = process.env.GSC_DATASET_ID;
+  const PROJECT_ID = process.env.FIREBASE_PROJECT_ID;
+
+  const results = {
+    projectId: PROJECT_ID,
+    location: bqLocation,
+    ga4Dataset: GA4_DATASET,
+    gscDataset: GSC_DATASET,
+    steps: []
+  };
+
+  try {
+    const [datasets] = await bigquery.getDatasets();
+    results.steps.push({ step: 'Project Access', status: 'success', message: `Found ${datasets.length} datasets: ${datasets.map(d => d.id).join(', ')}` });
+  } catch (err) {
+    results.steps.push({ step: 'Project Access', status: 'error', message: err.message });
+  }
+
+  if (GA4_DATASET) {
+    try {
+      const [tables] = await bigquery.dataset(GA4_DATASET).getTables();
+      const tableIds = tables.map(t => t.id);
+      results.steps.push({ step: 'GA4 Dataset Access', status: 'success', message: `Found tables: ${tableIds.join(', ')}` });
+      
+      const hasEvents = tableIds.some(id => id.startsWith('events_'));
+      results.steps.push({ step: 'GA4 Events Check', status: hasEvents ? 'success' : 'warning', message: hasEvents ? 'Found events_* tables.' : 'No events_* tables found.' });
+    } catch (err) {
+      results.steps.push({ step: 'GA4 Dataset Access', status: 'error', message: err.message });
+    }
+  }
+
+  if (GSC_DATASET) {
+    try {
+      const [tables] = await bigquery.dataset(GSC_DATASET).getTables();
+      results.steps.push({ step: 'GSC Dataset Access', status: 'success', message: `Found tables: ${tables.map(t => t.id).join(', ')}` });
+    } catch (err) {
+      results.steps.push({ step: 'GSC Dataset Access', status: 'error', message: err.message });
+    }
+  }
+
+  return res.status(200).json({ success: true, diagnostic: results });
 }
 
 async function handleTechnical(req, res, url, userId) {
