@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "mcp": "node mcp/server.js"
   },
   "keywords": [],
   "author": "",
@@ -14,6 +15,7 @@
     "@google-cloud/bigquery": "^8.1.1",
     "@google/generative-ai": "^0.24.1",
     "@huggingface/inference": "^4.13.10",
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "@mozilla/readability": "^0.6.0",
     "busboy": "^1.6.0",
     "cheerio": "^1.0.0",
