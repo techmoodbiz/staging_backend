@@ -16,6 +16,7 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 import { cosineSimilarity } from '../utils.js';
+import { performFullAudit } from '../auditUtils.js';
 
 async function getConsolidatedContext(brandId, queryEmbedding = null, topK = 12) {
   try {
@@ -175,12 +176,60 @@ Ngôn ngữ: ${language || "Vietnamese"}
       }
     });
 
-    const response = await model.generateContent(finalPrompt);
-    const resultText = response.response.text();
+    const draftResponse = await model.generateContent(finalPrompt);
+    let resultText = draftResponse.response.text();
+    let auditReport = null;
+    let isRefined = false;
+
+    // --- AGENTIC A2A LOOP: AUDIT & REFINE ---
+    const { agentic } = req.body;
+    if (agentic) {
+      console.log("Entering Agentic A2A Loop...");
+      
+      // 1. Auditor Agent Call
+      const auditResult = await performFullAudit({ 
+        text: resultText, 
+        language, 
+        platform, 
+        constructedPrompt: finalPrompt 
+      });
+      auditReport = auditResult.result;
+
+      // 2. Decide if Refinement is needed (e.g., High severity issues)
+      const highSeverityIssues = auditReport.identified_issues.filter(i => i.severity === 'High');
+      
+      if (highSeverityIssues.length > 0) {
+        console.log(`Found ${highSeverityIssues.length} High severity issues. Starting Refiner Agent...`);
+        
+        const refinementPrompt = `
+Bạn là **MOODBIZ REFINER AGENT**. 
+Dưới đây là một bản thảo nội dung vừa được tạo, nhưng **Auditor Agent** đã phát hiện một số lỗi nghiêm trọng.
+
+### BẢN THẢO HIỆN TẠI:
+"""
+${resultText}
+"""
+
+### CÁC LỖI CẦN SỬA (Từ Auditor):
+${highSeverityIssues.map((issue, idx) => `${idx + 1}. [${issue.category}] ${issue.problematic_text} -> Lý do: ${issue.reason} -> Gợi ý: ${issue.suggestion}`).join('\n')}
+
+### NHIỆM VỤ:
+Hãy viết lại bản thảo trên để khắc phục triệt để các lỗi này. 
+Giữ nguyên phong cách thương hiệu nhưng đảm bảo tuân thủ các gợi ý sửa đổi.
+CHỈ TRẢ VỀ NỘI DUNG SAU KHI ĐÃ SỬA. KHÔNG GIẢI THÍCH THÊM.
+`;
+        const refinementResponse = await model.generateContent(refinementPrompt);
+        resultText = refinementResponse.response.text();
+        isRefined = true;
+        console.log("Refinement complete.");
+      } else {
+        console.log("No High severity issues found. Skipping refinement.");
+      }
+    }
 
     // --- TRACK USAGE ---
     try {
-      const usage = response.response.usageMetadata;
+      const usage = draftResponse.response.usageMetadata;
       if (usage && currentUser && currentUser.uid) {
         const tokenCount = usage.totalTokenCount || 0;
         await db.collection('users').doc(currentUser.uid).update({
@@ -188,17 +237,9 @@ Ngôn ngữ: ${language || "Vietnamese"}
           'usageStats.requestCount': admin.firestore.FieldValue.increment(1),
           'usageStats.lastActiveAt': admin.firestore.FieldValue.serverTimestamp()
         }).catch(err => {
-          // If usageStats object doesn't exist, create it via set merge or just log warning. 
-          // Firestore update with dot notation usually requires the parent map to exist or it creates it if doc exists.
-          // To be safe, we can use set with merge if strictly needed, but update is usually fine for existing fields.
-          // If it fails because field missing, we try set.
           console.warn("Update usage failed, trying set...", err.message);
           db.collection('users').doc(currentUser.uid).set({
-            usageStats: {
-              totalTokens: tokenCount,
-              requestCount: 1,
-              lastActiveAt: admin.firestore.FieldValue.serverTimestamp()
-            }
+            usageStats: { totalTokens: tokenCount, requestCount: 1, lastActiveAt: admin.firestore.FieldValue.serverTimestamp() }
           }, { merge: true });
         });
       }
@@ -206,13 +247,15 @@ Ngôn ngữ: ${language || "Vietnamese"}
       console.error("Failed to track usage stats:", e);
     }
 
-    console.log("Gemini Response Received. Length:", resultText?.length);
+    console.log("Final Response Prepared. Length:", resultText?.length);
 
     res.status(200).json({
       success: true,
       result: resultText || "AI không thể phản hồi.",
       citations: sources,
-      usage: response.response.usageMetadata || { totalTokenCount: 0 }
+      audit_report: auditReport,
+      is_refined: isRefined,
+      usage: draftResponse.response.usageMetadata || { totalTokenCount: 0 }
     });
 
   } catch (e) {

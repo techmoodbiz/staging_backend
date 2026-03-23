@@ -18,8 +18,7 @@ if (!admin.apps.length) {
 }
 
 const db = admin.firestore();
-import { robustJSONParse } from '../utils.js';
-import { loadSkill } from '../skillLoader.js';
+import { performFullAudit } from '../auditUtils.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -51,282 +50,22 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { constructedPrompt, text, language, platform } = req.body;
-    const errors = [];
-    // Split token tracking
-    let tokensLogic = 0;
-    let tokensBrand = 0;
-    let tokensLang = 0;
+    const { result, usage, errors: auditErrors } = await performFullAudit({ text, language, platform, constructedPrompt });
+    
+    let tokensLogic = usage.tokensLogic;
+    let tokensBrand = usage.tokensBrand;
+    let tokensLang = usage.tokensLang;
 
-    // --- 1. LOGIC & LEGAL STREAM (DeepSeek) ---
-    const logicLegalPromise = (async () => {
-      let result = { identified_issues: [] };
-      try {
-        const dkKey = process.env.DEEPSEEK_API_KEY;
-        if (!dkKey) throw new Error("Missing DeepSeek Key");
+    const finalResult = result;
 
-        const { OpenAI } = await import('openai');
-        const openai = new OpenAI({ baseURL: 'https://api.deepseek.com', apiKey: dkKey });
-
-        const skillContent = await loadSkill('audit-logic-legal');
-        const systemInstruction = `
-You are **MOODBIZ LOGIC & LEGAL AUDITOR** (Agent Skill).
-Base your auditing on the following skill definition:
-
-${skillContent}
-
-### CONTEXT:
-- Platform: ${platform || 'General'}
-- Language: ${language || 'Vietnamese'}
-
-### NHIỆM VỤ QUAN TRỌNG NHẤT (MANDATORY):
-1. Chỉ được báo cáo lỗi khi tìm thấy sự vi phạm trực tiếp đối với các quy tắc được cung cấp (Module 3: MarkRules hoặc Module 4: LegalRules).
-2. ƯU TIÊN LEGAL: Nếu một lỗi vi phạm cả MarkRule và LegalRule, CHỈ báo cáo là 'legal'. Tuyệt đối không báo trùng lặp.
-3. TRÍCH DẪN CHÍNH XÁC: Trường "citation" phải khớp TÊN quy tắc (ví dụ: "MarkRule: Logic_01"). Đối với Legal Red Flags (mục 4 trong SKILL), dùng citation "Legal Red Flag: [Tên lỗi]".
-4. CẤM BỊA ĐẶT: Nếu một vấn đề không vi phạm quy tắc cụ thể nào -> KHÔNG ĐƯỢC BÁO LỖI.
-5. LEGAL RED FLAGS: Các lỗi trong mục 4 của SKILL (superlatives, cam kết tuyệt đối, tuyên bố y tế, so sánh đối thủ) LUÔN ĐƯỢC KIỂM TRA bất kể có LegalRule hay không.
-
-### CHAIN-OF-THOUGHT:
-Trước khi đưa ra kết luận, hãy:
-1. Đọc toàn bộ văn bản để hiểu ngữ cảnh.
-2. Liệt kê các tuyên bố quan trọng (claims) trong văn bản.
-3. So sánh chéo các tuyên bố để tìm mâu thuẫn nội bộ.
-4. Kiểm tra từng tuyên bố với các quy tắc SOP và Legal Red Flags.
-5. Chỉ báo cáo lỗi nếu chắc chắn >= 90%.
-
-JSON Schema:
-{
-  "summary": "Tóm tắt ngắn gọn lỗi vi phạm SOP",
-  "identified_issues": [
-    {
-       "category": "ai_logic" | "legal",
-       "problematic_text": "đoạn văn vi phạm",
-       "citation": "Tên chính xác sau dấu '### MarkRule:' hoặc '### LegalRule:' hoặc 'Legal Red Flag: [Tên]'",
-       "reason": "Giải thích chi tiết lỗi dựa trên SOP (Tiếng Việt)",
-       "severity": "High" | "Medium" | "Low",
-       "suggestion": "Gợi ý sửa đổi phù hợp"
-    }
-  ]
-}
-`;
-        const response = await openai.chat.completions.create({
-          messages: [{ role: "system", content: systemInstruction }, { role: "user", content: constructedPrompt || text }],
-          model: "deepseek-chat",
-          temperature: 0.1,
-          response_format: { type: "json_object" },
-          max_tokens: 4096
-        });
-
-        if (response.usage) tokensLogic += response.usage.total_tokens || 0;
-        result = robustJSONParse(response.choices[0].message.content);
-
-      } catch (e) {
-        console.error("DeepSeek (Logic/Legal) Error:", e.message);
-        errors.push(`Logic / Legal Error: ${e.message} `);
-        // Fallback or just return empty for this block? 
-        // Request implied DeepSeek is dedicated. We can fallback to Gemini if needed but user strictly separated.
-        // Let's add a robust fallback just in case or leave consistent with request?
-        // User said: "Logic & Legal BY DeepSeek". If it fails, maybe fail or fallback.
-        // I will return empty to avoid blocking others.
-      }
-      return result;
-    })();
-
-    // --- 2. BRAND & PRODUCT STREAM (Gemini) ---
-    const brandProductPromise = (async () => {
-      let result = { identified_issues: [] };
-      try {
-        const gmKey = process.env.GEMINI_API_KEY;
-        if (!gmKey) throw new Error("Missing Gemini Key");
-
-        const { GoogleGenerativeAI, SchemaType } = await import('@google/generative-ai');
-        const genAI = new GoogleGenerativeAI(gmKey);
-
-        const auditResponseSchema = {
-          type: SchemaType.OBJECT,
-          properties: {
-            summary: { type: SchemaType.STRING },
-            identified_issues: {
-              type: SchemaType.ARRAY,
-              items: {
-                type: SchemaType.OBJECT,
-                properties: {
-                  category: { type: SchemaType.STRING, description: "brand or product" },
-                  problematic_text: { type: SchemaType.STRING },
-                  citation: { type: SchemaType.STRING },
-                  reason: { type: SchemaType.STRING },
-                  severity: { type: SchemaType.STRING },
-                  suggestion: { type: SchemaType.STRING }
-                },
-                required: ["category", "problematic_text", "reason", "suggestion", "citation", "severity"]
-              }
-            }
-          },
-          required: ["summary", "identified_issues"]
-        };
-
-        const skillContent = await loadSkill('audit-brand-product');
-        const promptString = constructedPrompt || "";
-        const hasProductData = (promptString.includes("Product Information") || promptString.includes("Thông tin sản phẩm")) && !promptString.includes("Chung (Toàn thương hiệu)");
-
-        const systemInstruction = `
-You are ** MOODBIZ BRAND & PRODUCT AUDITOR ** (Agent Skill).
-Base your auditing on the following skill definition:
-
-${skillContent}
-
-### CURRENT CONTEXT:
-- PRODUCT_AUDIT_ENABLED: ${hasProductData ? "YES" : "NO"}
-- Platform: ${platform || 'General'}
-- Language: ${language || 'Vietnamese'}
-- If PRODUCT_AUDIT_ENABLED is NO, skip all product specification checks and focus ONLY on Brand Tone & Style.
-
-### CHAIN-OF-THOUGHT:
-Trước khi đưa ra kết luận, hãy:
-1. Xác định Brand Personality và Tone of Voice từ dữ liệu cung cấp.
-2. Đọc toàn bộ văn bản, đánh giá tone tổng thể.
-3. Kiểm tra sự nhất quán tone từ đầu đến cuối (Tone Drift detection).
-4. Kiểm tra từng forbidden word và biến thể của chúng.
-5. Nếu PRODUCT_AUDIT_ENABLED = YES, so sánh từng tuyên bố sản phẩm với Product Info.
-
-JSON Output Only.
-Summary / Reason in Vietnamese. Suggestion in ${language || 'Vietnamese'}.
-`;
-        const model = genAI.getGenerativeModel({
-          model: 'gemini-2.0-flash',
-          systemInstruction: systemInstruction,
-          generationConfig: { temperature: 0.1, responseMimeType: 'application/json', responseSchema: auditResponseSchema }
-        });
-
-        const response = await model.generateContent(constructedPrompt || text);
-        if (response.response.usageMetadata) tokensBrand += response.response.usageMetadata.totalTokenCount || 0;
-        result = robustJSONParse(response.response.text());
-
-      } catch (e) {
-        console.error("Gemini (Brand/Product) Error:", e.message);
-        errors.push(`Brand / Product Error: ${e.message} `);
-      }
-      return result;
-    })();
-
-    // --- 3. LANGUAGE STREAM (Gemini - Linguistic Expert Agent) ---
-    const languagePromise = (async () => {
-      const targetLang = language || 'Vietnamese';
-      let result = { identified_issues: [] };
-      try {
-        const gmKey = process.env.GEMINI_API_KEY;
-        if (!gmKey) throw new Error("Missing Gemini Key");
-
-        const { GoogleGenerativeAI, SchemaType } = await import('@google/generative-ai');
-        const genAI = new GoogleGenerativeAI(gmKey);
-
-        const langResponseSchema = {
-          type: SchemaType.OBJECT,
-          properties: {
-            summary: { type: SchemaType.STRING },
-            identified_issues: {
-              type: SchemaType.ARRAY,
-              items: {
-                type: SchemaType.OBJECT,
-                properties: {
-                  category: { type: SchemaType.STRING, description: "always 'language'" },
-                  problematic_text: { type: SchemaType.STRING },
-                  citation: { type: SchemaType.STRING, description: "Spelling, Grammar, or RedFlag" },
-                  reason: { type: SchemaType.STRING },
-                  severity: { type: SchemaType.STRING },
-                  suggestion: { type: SchemaType.STRING }
-                },
-                required: ["category", "problematic_text", "reason", "suggestion", "citation", "severity"]
-              }
-            }
-          },
-          required: ["summary", "identified_issues"]
-        };
-
-        const skillContent = await loadSkill('audit-linguistic-expert');
-        const systemInstruction = `
-You are ** MOODBIZ LINGUISTIC EXPERT ** (Agent Skill).
-Base your auditing on the following skill definition:
-
-${skillContent}
-
-### ADDITIONAL CONTEXT:
-- Target Language: ${targetLang}
-- Platform: ${platform || 'General'}
-- Strategy: SIÊU BẢO THỦ (Anti-hallucination). Only audit objective errors.
-- Platform Rules: Áp dụng quy tắc platform-specific từ mục 4 trong SKILL definition.
-  Ví dụ: Nếu platform là Facebook, emoji là chấp nhận được. Nếu platform là Email, emoji là lỗi.
-
-JSON Output Only. Summary / Reason in Vietnamese. Suggestion in the text's original language.
-`;
-        const model = genAI.getGenerativeModel({
-          model: 'gemini-2.0-flash',
-          systemInstruction: systemInstruction,
-          generationConfig: { temperature: 0.0, responseMimeType: 'application/json', responseSchema: langResponseSchema }
-        });
-
-        const response = await model.generateContent(`Text to audit: \n"""\n${text}\n"""`);
-        if (response.response.usageMetadata) tokensLang += response.response.usageMetadata.totalTokenCount || 0;
-        result = robustJSONParse(response.response.text());
-
-      } catch (e) {
-        console.error("Gemini (Language Agent) Error:", e.message);
-        errors.push(`Language Agent Error: ${e.message} `);
-        result = {
-          summary: "Lỗi hệ thống Language Audit.",
-          identified_issues: [{ category: "language", severity: "High", problematic_text: "System", citation: "API", reason: e.message, suggestion: "Kiểm tra lại kết nối Gemini." }]
-        };
-      }
-      return result;
-    })();
-
-    // --- MERGE RESULTS ---
-    const [logicLegalResult, brandProductResult, languageResult] = await Promise.all([logicLegalPromise, brandProductPromise, languagePromise]);
-
-    const summaries = [
-      logicLegalResult?.summary,
-      brandProductResult?.summary,
-      languageResult?.summary
-    ].filter(s => s && s.trim().length > 0);
-
-    // --- MERGE & FILTER RESULTS ---
-    const allIssues = [
-      ...(logicLegalResult?.identified_issues || []),
-      ...(brandProductResult?.identified_issues || []),
-      ...(languageResult?.identified_issues || [])
-    ];
-
-    // Deduplicate and filter out no-op suggestions
-    const uniqueIssues = [];
-    const seenIssues = new Set();
-
-    for (const issue of allIssues) {
-      if (!issue.problematic_text || !issue.suggestion) continue;
-
-      // Filter out identical suggestons
-      if (issue.problematic_text.trim() === issue.suggestion.trim()) continue;
-
-      // Unique key based on text and suggestion
-      const key = `${issue.problematic_text}|${issue.suggestion}`;
-      if (!seenIssues.has(key)) {
-        uniqueIssues.push(issue);
-        seenIssues.add(key);
-      }
-    }
-
-    const finalResult = {
-      summary: summaries.join(' | ') || "Hoàn tất kiểm tra.",
-      identified_issues: uniqueIssues
-    };
-
-    if (errors.length > 0) {
-      console.warn("Audit Partial Errors:", errors);
+    if (auditErrors.length > 0) {
+      console.warn("Audit Partial Errors:", auditErrors);
       finalResult.identified_issues.push({
         category: 'ai_logic',
         severity: 'Low',
         problematic_text: 'System Warning',
         citation: 'System',
-        reason: `Một số module Audit gặp lỗi: ${errors.join(', ')} `,
+        reason: `Một số module Audit gặp lỗi: ${auditErrors.join(', ')} `,
         suggestion: 'Vui lòng kiểm tra lại cấu hình.'
       });
     }
