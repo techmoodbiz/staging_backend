@@ -14,6 +14,7 @@
   "dependencies": {
     "@google-cloud/bigquery": "^6.0.1",
     "@google/generative-ai": "^0.24.1",
+    "uuid": "^9.0.1",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@mozilla/readability": "^0.6.0",
     "busboy": "^1.6.0",
