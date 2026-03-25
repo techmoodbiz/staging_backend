@@ -1,7 +1,7 @@
 import { BigQuery } from '@google-cloud/bigquery';
 import dotenv from 'dotenv';
 
-dotenv.config();
+dotenv.config({ path: '.env.local' });
 
 const PROJECT_ID = process.env.FIREBASE_PROJECT_ID;
 const GA4_DATASET = process.env.GA4_DATASET_ID;
@@ -10,7 +10,7 @@ const LOCATION = process.env.BIGQUERY_LOCATION || 'asia-southeast1';
 
 const bigquery = new BigQuery({
   projectId: PROJECT_ID,
-  location: LOCATION,
+  // location: LOCATION,
   credentials: {
     client_email: process.env.FIREBASE_CLIENT_EMAIL,
     private_key: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),

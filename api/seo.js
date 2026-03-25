@@ -206,14 +206,16 @@ async function handleAnalytics(req, res, url) {
         const [ga4Task] = await bigquery.query({ query: ga4Query, params: { url }, location: bqLocation });
         pageviews = ga4Task[0]?.pageviews || 0;
     } catch (e) {
-        console.warn('GA4 Dataset/Table might not be ready yet:', e.message);
+        console.warn(`[warning] GA4 Dataset/Table might not be ready yet: ${e.message}`);
+        console.log(`Hint: Check if GA4 BigQuery export is enabled on Google Analytics. Also verify BIGQUERY_LOCATION (${bqLocation}) and GA4_DATASET_ID (${GA4_DATASET}) on Vercel.`);
     }
 
     try {
         const [gscTask] = await bigquery.query({ query: gscQuery, params: { url }, location: bqLocation });
         gscResults = gscTask[0] || gscResults;
     } catch (e) {
-        console.warn('GSC Dataset/Table might not be ready yet:', e.message);
+        console.warn(`[warning] GSC Dataset/Table might not be ready yet: ${e.message}`);
+        console.log(`Hint: Check if GSC BigQuery export is enabled and wait 48h. Also verify BIGQUERY_LOCATION (${bqLocation}) and GSC_DATASET_ID (${GSC_DATASET}) on Vercel.`);
     }
 
     return res.status(200).json({
