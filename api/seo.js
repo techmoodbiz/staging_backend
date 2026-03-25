@@ -206,10 +206,11 @@ async function handleAnalytics(req, res, url) {
 
         // Note: Listing ALL properties can be slow if there are 1000+. 
         // Real implementation should cache this mapping in Firestore.
-        const [summaries] = await analyticsAdmin.accountSummaries.list({ auth: oauth2Client });
+        const summariesResp = await analyticsAdmin.accountSummaries.list({ auth: oauth2Client });
+        const summaries = summariesResp.data.accountSummaries || [];
         let propertyId = null;
 
-        for (const account of (summaries.accountSummaries || [])) {
+        for (const account of summaries) {
             for (const prop of (account.propertySummaries || [])) {
                 if (prop.displayName.includes(host) || host.includes(prop.displayName.replace('https://', '').replace('http://', ''))) {
                     propertyId = prop.property.replace('properties/', '');
