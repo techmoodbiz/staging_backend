@@ -49,6 +49,8 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: 'Unauthorized: Invalid token' });
   }
 
+  const { text, language, platform, constructedPrompt } = req.body;
+
   try {
     const { result, usage, errors: auditErrors } = await performFullAudit({ text, language, platform, constructedPrompt });
     
