@@ -39,8 +39,8 @@ oauth2Client.setCredentials({
 });
 
 const searchconsole = google.searchconsole({ version: 'v1', auth: oauth2Client });
-const analyticsData = google.analyticsdata({ version: 'v1', auth: oauth2Client });
-const analyticsAdmin = google.analyticsadmin({ version: 'v1alpha', auth: oauth2Client });
+const analyticsData = google.analyticsdata('v1beta'); // Using v1beta as it is often more stable in certain library versions
+const analyticsAdmin = google.analyticsadmin('v1alpha');
 
 export default async function handler(req, res) {
   // CORS Configuration
@@ -195,6 +195,9 @@ async function handleAnalytics(req, res, url) {
     if (!GSC_DATASET) return res.status(200).json({ success: false, error: 'Thiếu cấu hình GSC_DATASET_ID trên Vercel.' });
     if (!PROJECT_ID) return res.status(200).json({ success: false, error: 'Thiếu cấu hình FIREBASE_PROJECT_ID trên Vercel.' });
 
+    let pageviews = 0;
+    let gscResults = { clicks: 0, impressions: 0, avg_position: 0 };
+
     // --- GA4 API MIGRATION ---
     try {
         // 1. Find GA4 Property ID matching the host
@@ -203,7 +206,7 @@ async function handleAnalytics(req, res, url) {
 
         // Note: Listing ALL properties can be slow if there are 1000+. 
         // Real implementation should cache this mapping in Firestore.
-        const [summaries] = await analyticsAdmin.accountSummaries.list();
+        const [summaries] = await analyticsAdmin.accountSummaries.list({ auth: oauth2Client });
         let propertyId = null;
 
         for (const account of (summaries.accountSummaries || [])) {
@@ -218,6 +221,7 @@ async function handleAnalytics(req, res, url) {
 
         if (propertyId) {
             const ga4Resp = await analyticsData.properties.runReport({
+                auth: oauth2Client,
                 property: `properties/${propertyId}`,
                 requestBody: {
                     dateRanges: [{ startDate: '30daysAgo', endDate: 'yesterday' }],
