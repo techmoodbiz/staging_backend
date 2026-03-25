@@ -1,6 +1,7 @@
 import fetch from 'node-fetch';
 import admin from 'firebase-admin';
 import { BigQuery } from '@google-cloud/bigquery';
+import { google } from 'googleapis';
 
 // Initialize Firebase Admin
 if (!admin.apps.length) {
@@ -18,7 +19,6 @@ if (!admin.apps.length) {
 }
 
 const bqLocation = process.env.BIGQUERY_LOCATION || 'asia-southeast1';
-console.log('BigQuery Location:', bqLocation);
 
 const bigquery = new BigQuery({
   projectId: process.env.FIREBASE_PROJECT_ID,
@@ -28,6 +28,19 @@ const bigquery = new BigQuery({
     private_key: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
   }
 });
+
+// Initialize Search Console API with OAuth2 Refresh Token (from Tech Account)
+const oauth2Client = new google.auth.OAuth2(
+  process.env.GSC_CLIENT_ID,
+  process.env.GSC_CLIENT_SECRET
+);
+oauth2Client.setCredentials({
+  refresh_token: process.env.GSC_REFRESH_TOKEN
+});
+
+const searchconsole = google.searchconsole({ version: 'v1', auth: oauth2Client });
+const analyticsData = google.analyticsdata({ version: 'v1', auth: oauth2Client });
+const analyticsAdmin = google.analyticsadmin({ version: 'v1alpha', auth: oauth2Client });
 
 export default async function handler(req, res) {
   // CORS Configuration
@@ -182,40 +195,110 @@ async function handleAnalytics(req, res, url) {
     if (!GSC_DATASET) return res.status(200).json({ success: false, error: 'Thiếu cấu hình GSC_DATASET_ID trên Vercel.' });
     if (!PROJECT_ID) return res.status(200).json({ success: false, error: 'Thiếu cấu hình FIREBASE_PROJECT_ID trên Vercel.' });
 
-    const ga4Query = `
-      SELECT count(*) as pageviews
-      FROM \`${PROJECT_ID}.${GA4_DATASET}.events_*\`
-      WHERE event_name = 'page_view'
-      AND (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'page_location') = @url
-      AND _TABLE_SUFFIX BETWEEN FORMAT_DATE('%Y%m%d', DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY))
-      AND FORMAT_DATE('%Y%m%d', DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY))
-    `;
-
-    const gscQuery = `
-      SELECT sum(clicks) as clicks, sum(impressions) as impressions, avg(position) as avg_position
-      FROM \`${PROJECT_ID}.${GSC_DATASET}.searchdata_url_impressions\`
-      WHERE url = @url
-      AND data_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
-    `;
-
-    // Chúng ta dùng try-catch riêng cho từng query để bắt lỗi "Bảng chưa tồn tại"
-    let pageviews = 0;
-    let gscResults = { clicks: 0, impressions: 0, avg_position: 0 };
-
+    // --- GA4 API MIGRATION ---
     try {
-        const [ga4Task] = await bigquery.query({ query: ga4Query, params: { url }, location: bqLocation });
-        pageviews = ga4Task[0]?.pageviews || 0;
+        // 1. Find GA4 Property ID matching the host
+        const urlObj = new URL(url);
+        const host = urlObj.hostname;
+
+        // Note: Listing ALL properties can be slow if there are 1000+. 
+        // Real implementation should cache this mapping in Firestore.
+        const [summaries] = await analyticsAdmin.accountSummaries.list();
+        let propertyId = null;
+
+        for (const account of (summaries.accountSummaries || [])) {
+            for (const prop of (account.propertySummaries || [])) {
+                if (prop.displayName.includes(host) || host.includes(prop.displayName.replace('https://', '').replace('http://', ''))) {
+                    propertyId = prop.property.replace('properties/', '');
+                    break;
+                }
+            }
+            if (propertyId) break;
+        }
+
+        if (propertyId) {
+            const ga4Resp = await analyticsData.properties.runReport({
+                property: `properties/${propertyId}`,
+                requestBody: {
+                    dateRanges: [{ startDate: '30daysAgo', endDate: 'yesterday' }],
+                    dimensions: [{ name: 'pageLocation' }],
+                    metrics: [{ name: 'screenPageViews' }],
+                    dimensionFilter: {
+                        filter: {
+                            fieldName: 'pageLocation',
+                            stringFilter: {
+                                matchType: 'EXACT',
+                                value: url
+                            }
+                        }
+                    }
+                }
+            });
+
+            pageviews = Number(ga4Resp.data.rows?.[0]?.metricValues?.[0]?.value || 0);
+        } else {
+            console.warn(`[warning] No matching GA4 property found for host: ${host}`);
+        }
     } catch (e) {
-        console.warn(`[warning] GA4 Dataset/Table might not be ready yet: ${e.message}`);
-        console.log(`Hint: Check if GA4 BigQuery export is enabled on Google Analytics. Also verify BIGQUERY_LOCATION (${bqLocation}) and GA4_DATASET_ID (${GA4_DATASET}) on Vercel.`);
+        console.warn(`[warning] GA4 API error: ${e.message}`);
+        console.log(`Hint: Ensure GA4 Data API is enabled and account access is granted.`);
     }
 
     try {
-        const [gscTask] = await bigquery.query({ query: gscQuery, params: { url }, location: bqLocation });
-        gscResults = gscTask[0] || gscResults;
+        // --- GSC API MIGRATION ---
+        // Instead of BigQuery, we use the Search Console API which supports 1000+ sites naturally
+        
+        // 1. Find the best matching site property
+        const sitesResp = await searchconsole.sites.list();
+        const siteEntries = sitesResp.data.siteEntry || [];
+        
+        // Find property that matches the URL
+        let siteUrl = null;
+        const sortedSites = siteEntries.sort((a, b) => b.siteUrl.length - a.siteUrl.length);
+        for (const s of sortedSites) {
+            const cleanS = s.siteUrl.startsWith('sc-domain:') ? s.siteUrl.replace('sc-domain:', '') : s.siteUrl;
+            if (url.includes(cleanS)) {
+                siteUrl = s.siteUrl;
+                break;
+            }
+        }
+
+        if (siteUrl) {
+            const endDate = new Date();
+            endDate.setDate(endDate.getDate() - 1); // GSC usually has 1-day lag
+            const startDate = new Date();
+            startDate.setDate(startDate.getDate() - 30);
+
+            const gscResp = await searchconsole.searchanalytics.query({
+                siteUrl: siteUrl,
+                requestBody: {
+                    startDate: startDate.toISOString().split('T')[0],
+                    endDate: endDate.toISOString().split('T')[0],
+                    dimensions: ['page'],
+                    dimensionFilterGroups: [{
+                        filters: [{
+                            dimension: 'page',
+                            operator: 'equals',
+                            expression: url
+                        }]
+                    }]
+                }
+            });
+
+            const row = gscResp.data.rows?.[0];
+            if (row) {
+                gscResults = {
+                    clicks: row.clicks || 0,
+                    impressions: row.impressions || 0,
+                    avg_position: row.position || 0
+                };
+            }
+        } else {
+            console.warn(`[warning] No matching GSC property found for URL: ${url}. Available properties: ${siteEntries.map(s => s.siteUrl).join(', ')}`);
+        }
     } catch (e) {
-        console.warn(`[warning] GSC Dataset/Table might not be ready yet: ${e.message}`);
-        console.log(`Hint: Check if GSC BigQuery export is enabled and wait 48h. Also verify BIGQUERY_LOCATION (${bqLocation}) and GSC_DATASET_ID (${GSC_DATASET}) on Vercel.`);
+        console.warn(`[warning] GSC API error: ${e.message}`);
+        console.log(`Hint: Ensure the service account has 'Viewer' access to the GSC property.`);
     }
 
     return res.status(200).json({
@@ -230,6 +313,6 @@ async function handleAnalytics(req, res, url) {
 
   } catch (error) {
     console.error('Lỗi handleAnalytics tổng quát:', error);
-    return res.status(500).json({ error: 'Lỗi truy vấn BigQuery: ' + error.message });
+    return res.status(500).json({ error: 'Lỗi truy vấn dữ liệu: ' + error.message });
   }
 }
