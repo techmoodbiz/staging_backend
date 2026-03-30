@@ -10,17 +10,12 @@
       ]
     }
   ],
-  "builds": [
-    {
-      "src": "api/*.js",
-      "use": "@vercel/node",
-      "config": {
-        "includeFiles": [
-          "node_modules/gaxios/**",
-          "node_modules/gcp-metadata/**",
-          "node_modules/google-auth-library/**"
-        ]
-      }
+  "functions": {
+    "api/*.js": {
+      "includeFiles": "node_modules/gaxios/**"
+    },
+    "mcp/**/*.js": {
+      "includeFiles": "node_modules/gaxios/**"
     }
   }
 }
