@@ -63,7 +63,10 @@ async function initClients() {
     aa = google.analyticsadmin({ version: 'v1alpha', auth: oauth2Client });
   }
 
-  return { bq, gsc, ad, aa, oauth2Client: gsc.context._options.auth }; 
+  // Get the auth client back from the services if needed, but we have it here
+  const auth = gsc.context._options.auth;
+
+  return { admin, db, bq, gsc, ad, aa, oauth2Client: auth }; 
 }
 
 export default async function handler(req, res) {
@@ -72,64 +75,61 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
 
   try {
-    // 2. LAZY INIT CLIENTS
-    const { bq: bigquery, gsc: searchconsole, ad: analyticsData, aa: analyticsAdmin, oauth2Client } = await initClients();
+    // 2. LAZY INIT CLIENTS (Safe Load)
+    const clients = await initClients();
+    const { admin, bq, gsc, ad, aa, oauth2Client } = clients;
 
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  // --- AUTH VERIFICATION ---
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  const token = authHeader.split('Bearer ')[1];
-  let decodedToken;
-  try {
-    decodedToken = await admin.auth().verifyIdToken(token);
-  } catch (error) {
-    return res.status(401).json({ error: 'Unauthorized: Token verification failed' });
-  }
-  const userId = decodedToken.uid;
+    // --- AUTH VERIFICATION ---
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const token = authHeader.split('Bearer ')[1];
+    let decodedToken;
+    try {
+      decodedToken = await admin.auth().verifyIdToken(token);
+    } catch (error) {
+      return res.status(401).json({ error: 'Unauthorized: Token verification failed' });
+    }
+    const userId = decodedToken.uid;
 
-  const { url, action } = req.body;
-  if (!url && action !== 'diagnostic') return res.status(400).json({ error: 'URL is required' });
+    const { url, action } = req.body;
+    if (!url && action !== 'diagnostic') return res.status(400).json({ error: 'URL is required' });
 
-  // ROUTING BASED ON ACTION
-  if (action === 'analytics') {
-    return handleAnalytics(req, res, url);
-  } else if (action === 'diagnostic') {
-    return handleDiagnostic(req, res);
-  } else {
-    // Default to technical analysis
-    return handleTechnical(req, res, url, userId);
+    // ROUTING BASED ON ACTION - Pass clients explicitly
+    if (action === 'analytics') {
+      return handleAnalytics(req, res, url, { gsc, ad, aa, oauth2Client });
+    } else if (action === 'diagnostic') {
+      return handleDiagnostic(req, res, { bq });
+    } else {
+      return handleTechnical(req, res, url, userId, { admin });
     }
   } catch (error) {
     console.error('CRITICAL SEO ERROR:', error);
-    // Ensure headers are set even in catch (though set at top)
     return res.status(500).json({ error: error.message });
   }
 }
 
-async function handleDiagnostic(req, res) {
+async function handleDiagnostic(req, res, { bq }) {
   const GA4_DATASET = process.env.GA4_DATASET_ID;
   const GSC_DATASET = process.env.GSC_DATASET_ID;
   const PROJECT_ID = process.env.FIREBASE_PROJECT_ID;
 
   const results = {
     projectId: PROJECT_ID,
-    location: bqLocation,
+    location: bq.location,
     ga4Dataset: GA4_DATASET,
     gscDataset: GSC_DATASET,
     steps: []
   };
 
   try {
-    const [datasets] = await bigquery.getDatasets();
+    const [datasets] = await bq.getDatasets();
     results.steps.push({ step: 'Project Access', status: 'success', message: `Found ${datasets.length} datasets: ${datasets.map(d => d.id).join(', ')}` });
   } catch (err) {
     results.steps.push({ step: 'Project Access', status: 'error', message: err.message });
@@ -137,7 +137,7 @@ async function handleDiagnostic(req, res) {
 
   if (GA4_DATASET) {
     try {
-      const [tables] = await bigquery.dataset(GA4_DATASET).getTables();
+      const [tables] = await bq.dataset(GA4_DATASET).getTables();
       const tableIds = tables.map(t => t.id);
       results.steps.push({ step: 'GA4 Dataset Access', status: 'success', message: `Found tables: ${tableIds.join(', ')}` });
       
@@ -150,7 +150,7 @@ async function handleDiagnostic(req, res) {
 
   if (GSC_DATASET) {
     try {
-      const [tables] = await bigquery.dataset(GSC_DATASET).getTables();
+      const [tables] = await bq.dataset(GSC_DATASET).getTables();
       results.steps.push({ step: 'GSC Dataset Access', status: 'success', message: `Found tables: ${tables.map(t => t.id).join(', ')}` });
     } catch (err) {
       results.steps.push({ step: 'GSC Dataset Access', status: 'error', message: err.message });
@@ -160,7 +160,7 @@ async function handleDiagnostic(req, res) {
   return res.status(200).json({ success: true, diagnostic: results });
 }
 
-async function handleTechnical(req, res, url, userId) {
+async function handleTechnical(req, res, url, userId, { admin }) {
   try {
     const API_LOGIN = process.env.SEO_API_LOGIN;
     const API_PASSWORD = process.env.SEO_API_PASSWORD;
@@ -221,7 +221,7 @@ async function handleTechnical(req, res, url, userId) {
   }
 }
 
-async function handleAnalytics(req, res, url) {
+async function handleAnalytics(req, res, url, { gsc, ad, aa, oauth2Client }) {
   try {
     const GA4_DATASET = process.env.GA4_DATASET_ID;
     const GSC_DATASET = process.env.GSC_DATASET_ID;
@@ -242,7 +242,7 @@ async function handleAnalytics(req, res, url) {
 
         // Note: Listing ALL properties can be slow if there are 1000+. 
         // Real implementation should cache this mapping in Firestore.
-        const summariesResp = await analyticsAdmin.accountSummaries.list({ auth: oauth2Client });
+        const summariesResp = await aa.accountSummaries.list({ auth: oauth2Client });
         const summaries = summariesResp.data.accountSummaries || [];
         let propertyId = null;
 
@@ -257,7 +257,7 @@ async function handleAnalytics(req, res, url) {
         }
 
         if (propertyId) {
-            const ga4Resp = await analyticsData.properties.runReport({
+            const ga4Resp = await ad.properties.runReport({
                 auth: oauth2Client,
                 property: `properties/${propertyId}`,
                 requestBody: {
@@ -290,7 +290,7 @@ async function handleAnalytics(req, res, url) {
         // Instead of BigQuery, we use the Search Console API which supports 1000+ sites naturally
         
         // 1. Find the best matching site property
-        const sitesResp = await searchconsole.sites.list();
+        const sitesResp = await gsc.sites.list();
         const siteEntries = sitesResp.data.siteEntry || [];
         
         // Find property that matches the URL
@@ -310,7 +310,8 @@ async function handleAnalytics(req, res, url) {
             const startDate = new Date();
             startDate.setDate(startDate.getDate() - 30);
 
-            const gscResp = await searchconsole.searchanalytics.query({
+            const gscResp = await gsc.searchanalytics.query({
+                auth: oauth2Client,
                 siteUrl: siteUrl,
                 requestBody: {
                     startDate: startDate.toISOString().split('T')[0],
