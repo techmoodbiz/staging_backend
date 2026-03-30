@@ -38,6 +38,8 @@
     "uuid": "^8.3.2"
   },
   "overrides": {
-    "gcp-metadata": "8.1.2"
+    "gcp-metadata": "8.1.2",
+    "entities": "4.5.0",
+    "htmlparser2": "9.1.0"
   }
 }
