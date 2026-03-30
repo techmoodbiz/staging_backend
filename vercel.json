@@ -12,7 +12,7 @@
   ],
   "functions": {
     "api/**/*.js": {
-      "includeFiles": "node_modules/gaxios/**"
+      "includeFiles": "node_modules/{gaxios,gcp-metadata,google-auth-library}/build/src/**"
     }
   }
 }
