@@ -1,26 +1,36 @@
-import admin from 'firebase-admin';
 import * as cheerio from "cheerio";
 import fetch from "node-fetch";
 import busboy from 'busboy';
 import mammoth from 'mammoth';
 
+let admin = null;
 let db = null;
 let bucket = null;
 
-function initAdmin() {
-    if (!admin.apps.length) {
-        admin.initializeApp({
-            credential: admin.credential.cert({
-                projectId: process.env.FIREBASE_PROJECT_ID,
-                clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-                privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-            }),
-            storageBucket: process.env.GOOGLE_STORAGE_BUCKET,
-        });
+async function initAdmin() {
+    if (!admin) {
+        try {
+            const { default: firebaseAdmin } = await import('firebase-admin');
+            admin = firebaseAdmin;
+            
+            if (!admin.apps.length) {
+                admin.initializeApp({
+                    credential: admin.credential.cert({
+                        projectId: process.env.FIREBASE_PROJECT_ID,
+                        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+                        privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+                    }),
+                    storageBucket: process.env.GOOGLE_STORAGE_BUCKET,
+                });
+            }
+            db = admin.firestore();
+            bucket = admin.storage().bucket();
+        } catch (error) {
+            console.error('Firebase dynamic init error (brand-manager):', error);
+            throw error;
+        }
     }
-    if (!db) db = admin.firestore();
-    if (!bucket) bucket = admin.storage().bucket();
-    return { db, bucket };
+    return { admin, db, bucket };
 }
 
 export default async function handler(req, res) {
@@ -33,7 +43,7 @@ export default async function handler(req, res) {
 
     try {
         // 2. LAZY INIT
-        const { db, bucket } = initAdmin();
+        const { db, bucket } = await initAdmin();
 
         if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 

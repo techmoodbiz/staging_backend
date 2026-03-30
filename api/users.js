@@ -1,26 +1,30 @@
-import admin from "firebase-admin";
 import fetch from "node-fetch";
 
+let admin = null;
 let db = null;
-let auth = null;
 
-function initAdmin() {
-    if (!admin.apps.length) {
-        try {
-            admin.initializeApp({
-                credential: admin.credential.cert({
-                    projectId: process.env.FIREBASE_PROJECT_ID,
-                    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-                    privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
-                }),
-            });
-        } catch (error) {
-            console.error("Firebase admin initialization error", error);
-        }
+async function initAdmin() {
+  if (!admin) {
+    try {
+      const { default: firebaseAdmin } = await import('firebase-admin');
+      admin = firebaseAdmin;
+      
+      if (!admin.apps.length) {
+        admin.initializeApp({
+          credential: admin.credential.cert({
+            projectId: process.env.FIREBASE_PROJECT_ID,
+            clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+            privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+          }),
+        });
+      }
+      db = admin.firestore();
+    } catch (error) {
+      console.error('Firebase dynamic init error (users):', error);
+      throw error;
     }
-    if (!db) db = admin.firestore();
-    if (!auth) auth = admin.auth();
-    return { db, auth };
+  }
+  return { admin, db };
 }
 
 export default async function handler(req, res) {
@@ -33,7 +37,8 @@ export default async function handler(req, res) {
 
     try {
         // 2. LAZY INIT
-        const { db, auth } = initAdmin();
+        const { admin, db } = await initAdmin();
+        const auth = admin.auth();
 
         if (req.method !== "POST") return res.status(405).json({ error: "Only POST allowed" });
 

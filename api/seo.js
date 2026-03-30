@@ -1,25 +1,40 @@
 import fetch from 'node-fetch';
-import admin from 'firebase-admin';
-import { BigQuery } from '@google-cloud/bigquery';
-import { google } from 'googleapis';
+
+let admin = null;
+let db = null;
+let BigQuery = null;
+let google = null;
 
 let bq = null;
 let gsc = null;
 let ad = null;
 let aa = null;
 
-function initClients() {
-  if (!admin.apps.length) {
+async function initClients() {
+  if (!admin) {
     try {
-      admin.initializeApp({
-        credential: admin.credential.cert({
-          projectId: process.env.FIREBASE_PROJECT_ID,
-          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-          privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-        }),
-      });
+      const { default: firebaseAdmin } = await import('firebase-admin');
+      admin = firebaseAdmin;
+      
+      if (!admin.apps.length) {
+        admin.initializeApp({
+          credential: admin.credential.cert({
+            projectId: process.env.FIREBASE_PROJECT_ID,
+            clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+            privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+          }),
+        });
+      }
+      db = admin.firestore();
+
+      const { BigQuery: bqClass } = await import('@google-cloud/bigquery');
+      BigQuery = bqClass;
+
+      const { google: g } = await import('googleapis');
+      google = g;
     } catch (error) {
-      console.error('Firebase admin init error', error);
+      console.error('Safe Load Error (SEO):', error);
+      throw error;
     }
   }
 
@@ -63,7 +78,7 @@ export default async function handler(req, res) {
 
   try {
     // 2. LAZY INIT CLIENTS
-    const { bq: bigquery, gsc: searchconsole, ad: analyticsData, aa: analyticsAdmin, oauth2Client } = initClients();
+    const { bq: bigquery, gsc: searchconsole, ad: analyticsData, aa: analyticsAdmin, oauth2Client } = await initClients();
 
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 

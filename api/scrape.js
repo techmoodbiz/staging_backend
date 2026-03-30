@@ -3,26 +3,31 @@ import { parseHTML } from 'linkedom';
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
 import https from 'https';
-import admin from 'firebase-admin';
-
+let admin = null;
 let db = null;
 
-function initAdmin() {
-  if (!admin.apps.length) {
+async function initAdmin() {
+  if (!admin) {
     try {
-      admin.initializeApp({
-        credential: admin.credential.cert({
-          projectId: process.env.FIREBASE_PROJECT_ID,
-          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-          privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-        }),
-      });
+      const { default: firebaseAdmin } = await import('firebase-admin');
+      admin = firebaseAdmin;
+      
+      if (!admin.apps.length) {
+        admin.initializeApp({
+          credential: admin.credential.cert({
+            projectId: process.env.FIREBASE_PROJECT_ID,
+            clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+            privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+          }),
+        });
+      }
+      db = admin.firestore();
     } catch (error) {
-      console.error('Firebase admin init error', error);
+      console.error('Firebase dynamic init error:', error);
+      throw error; // Let the handler's catch block handle it
     }
   }
-  if (!db) db = admin.firestore();
-  return { db };
+  return { admin, db };
 }
 
 export default async function handler(req, res) {
@@ -34,8 +39,8 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   try {
-    // 2. LAZY INIT
-    const { db } = initAdmin();
+    // 2. LAZY INIT (Dynamic)
+    const { admin, db } = await initAdmin();
 
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 

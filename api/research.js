@@ -101,7 +101,7 @@ export default async function handler(req, res) {
 
     try {
         // 2. LAZY INIT
-        const { db } = initAdmin();
+        const { db } = await initAdmin();
 
         if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
