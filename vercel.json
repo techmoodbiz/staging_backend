@@ -11,8 +11,12 @@
     }
   ],
   "functions": {
-    "api/**/*.js": {
-      "includeFiles": "../node_modules/g*/**"
-    }
+    "api/seo.js": { "includeFiles": "node_modules/gaxios/**" },
+    "api/users.js": { "includeFiles": "node_modules/gaxios/**" },
+    "api/auditContent.js": { "includeFiles": "node_modules/gaxios/**" },
+    "api/research.js": { "includeFiles": "node_modules/gaxios/**" },
+    "api/brand-manager.js": { "includeFiles": "node_modules/gaxios/**" },
+    "api/generateContent.js": { "includeFiles": "node_modules/gaxios/**" },
+    "api/scrape.js": { "includeFiles": "node_modules/gaxios/**" }
   }
 }

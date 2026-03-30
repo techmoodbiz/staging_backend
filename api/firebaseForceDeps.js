@@ -1,8 +1,6 @@
-// Force Vercel/NFT to include transitive Google auth deps
-// when `firebase-admin` is loaded dynamically.
-import "gaxios/build/src/index.js";
-import "gcp-metadata/build/src/index.js";
-import "google-auth-library/build/src/index.js";
+// Force Vercel/NFT to include `gaxios` for firebase/Google auth stacks.
+// This file is only here to make Vercel bundling/package include the dependency.
+import "gaxios";
 
 export {};
 
