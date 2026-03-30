@@ -1,5 +1,4 @@
 import fetch from 'node-fetch';
-import 'gaxios'; // Ghost import to force Vercel bundling
 
 let admin = null;
 let db = null;
