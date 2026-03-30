@@ -5,56 +5,60 @@ import TurndownService from 'turndown';
 import https from 'https';
 import admin from 'firebase-admin';
 
-// Initialize Firebase Admin
-if (!admin.apps.length) {
-  try {
-    admin.initializeApp({
-      credential: admin.credential.cert({
-        projectId: process.env.FIREBASE_PROJECT_ID,
-        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-      }),
-    });
-  } catch (error) {
-    console.error('Firebase admin init error', error);
+let db = null;
+
+function initAdmin() {
+  if (!admin.apps.length) {
+    try {
+      admin.initializeApp({
+        credential: admin.credential.cert({
+          projectId: process.env.FIREBASE_PROJECT_ID,
+          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+          privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+        }),
+      });
+    } catch (error) {
+      console.error('Firebase admin init error', error);
+    }
   }
+  if (!db) db = admin.firestore();
+  return { db };
 }
 
-// Agent để bypass lỗi SSL certificate (nếu có)
-const httpsAgent = new https.Agent({
-  rejectUnauthorized: false,
-});
-
 export default async function handler(req, res) {
-  // Config CORS
+  // 1. IMMEDIATE CORS & OPTIONS RESPONSE
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-
-  // --- AUTH VERIFICATION ---
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized: Missing or invalid token' });
-  }
-  const token = authHeader.split('Bearer ')[1];
-  let uid;
-  try {
-    const decodedToken = await admin.auth().verifyIdToken(token);
-    uid = decodedToken.uid;
-  } catch (error) {
-    return res.status(401).json({ error: 'Unauthorized: Token verification failed' });
-  }
-  // -------------------------
+  if (req.method === 'OPTIONS') return res.status(200).end();
 
   try {
+    // 2. LAZY INIT
+    const { db } = initAdmin();
+
+    if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+    // --- AUTH VERIFICATION ---
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized: Missing or invalid token' });
+    }
+    const token = authHeader.split('Bearer ')[1];
+    let uid;
+    try {
+      const decodedToken = await admin.auth().verifyIdToken(token);
+      uid = decodedToken.uid;
+    } catch (error) {
+      return res.status(401).json({ error: 'Unauthorized: Token verification failed' });
+    }
+    // -------------------------
+
+    // Agent để bypass lỗi SSL certificate (nếu có)
+    const httpsAgent = new https.Agent({
+      rejectUnauthorized: false,
+    });
+
     const { url, cleaningLevel = 'aggressive' } = req.body;
 
     if (!url) return res.status(400).json({ error: 'URL is required' });

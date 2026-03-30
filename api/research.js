@@ -7,22 +7,25 @@ import https from 'https';
 import admin from 'firebase-admin';
 import crypto from 'node:crypto';
 
-// Initialize Firebase Admin
-if (!admin.apps.length) {
-    try {
-        admin.initializeApp({
-            credential: admin.credential.cert({
-                projectId: process.env.FIREBASE_PROJECT_ID,
-                clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-                privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-            }),
-        });
-    } catch (error) {
-        console.error('Firebase admin init error', error);
-    }
-}
+let db = null;
 
-const db = admin.firestore();
+function initAdmin() {
+    if (!admin.apps.length) {
+        try {
+            admin.initializeApp({
+                credential: admin.credential.cert({
+                    projectId: process.env.FIREBASE_PROJECT_ID,
+                    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+                    privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+                }),
+            });
+        } catch (error) {
+            console.error('Firebase admin init error', error);
+        }
+    }
+    if (!db) db = admin.firestore();
+    return { db };
+}
 
 // Agent to bypass SSL certificate issues
 const httpsAgent = new https.Agent({
@@ -89,23 +92,27 @@ async function scrapeUrlTiered(url) {
 }
 
 export default async function handler(req, res) {
+    // 1. IMMEDIATE CORS & OPTIONS RESPONSE
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
     if (req.method === 'OPTIONS') return res.status(200).end();
-    if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
-    const token = authHeader.split('Bearer ')[1];
-    let uid;
-    try {
-        const decodedToken = await admin.auth().verifyIdToken(token);
-        uid = decodedToken.uid;
-    } catch (error) { return res.status(401).json({ error: 'Unauthorized' }); }
 
     try {
+        // 2. LAZY INIT
+        const { db } = initAdmin();
+
+        if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
+        const token = authHeader.split('Bearer ')[1];
+        let uid;
+        try {
+            const decodedToken = await admin.auth().verifyIdToken(token);
+            uid = decodedToken.uid;
+        } catch (error) { return res.status(401).json({ error: 'Unauthorized' }); }
         const { keyword, urls, language = 'vi' } = req.body;
 
         // URLs are now mandatory

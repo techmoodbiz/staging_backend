@@ -1,33 +1,42 @@
 import admin from "firebase-admin";
 import fetch from "node-fetch";
 
-// Initialize Firebase Admin
-if (!admin.apps.length) {
-    try {
-        admin.initializeApp({
-            credential: admin.credential.cert({
-                projectId: process.env.FIREBASE_PROJECT_ID,
-                clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-                privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
-            }),
-        });
-    } catch (error) {
-        console.error("Firebase admin initialization error", error);
+let db = null;
+let auth = null;
+
+function initAdmin() {
+    if (!admin.apps.length) {
+        try {
+            admin.initializeApp({
+                credential: admin.credential.cert({
+                    projectId: process.env.FIREBASE_PROJECT_ID,
+                    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+                    privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+                }),
+            });
+        } catch (error) {
+            console.error("Firebase admin initialization error", error);
+        }
     }
+    if (!db) db = admin.firestore();
+    if (!auth) auth = admin.auth();
+    return { db, auth };
 }
 
-const db = admin.firestore();
-const auth = admin.auth();
-
 export default async function handler(req, res) {
+    // 1. IMMEDIATE CORS & OPTIONS RESPONSE
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization");
 
     if (req.method === "OPTIONS") return res.status(200).end();
-    if (req.method !== "POST") return res.status(405).json({ error: "Only POST allowed" });
 
     try {
+        // 2. LAZY INIT
+        const { db, auth } = initAdmin();
+
+        if (req.method !== "POST") return res.status(405).json({ error: "Only POST allowed" });
+
         const authHeader = req.headers.authorization;
         if (!authHeader || !authHeader.startsWith("Bearer ")) {
             return res.status(401).json({ error: "Unauthorized" });

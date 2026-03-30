@@ -2,18 +2,22 @@
 import fetch from "node-fetch";
 import admin from "firebase-admin";
 
-if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.cert({
-      type: "service_account",
-      project_id: process.env.FIREBASE_PROJECT_ID,
-      private_key: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
-      client_email: process.env.FIREBASE_CLIENT_EMAIL,
-    }),
-  });
-}
+let db = null;
 
-const db = admin.firestore();
+function initAdmin() {
+  if (!admin.apps.length) {
+    admin.initializeApp({
+      credential: admin.credential.cert({
+        type: "service_account",
+        project_id: process.env.FIREBASE_PROJECT_ID,
+        private_key: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+        client_email: process.env.FIREBASE_CLIENT_EMAIL,
+      }),
+    });
+  }
+  if (!db) db = admin.firestore();
+  return { db };
+}
 
 import { cosineSimilarity } from '../utils.js';
 import { performFullAudit } from '../auditUtils.js';
@@ -73,31 +77,35 @@ async function getConsolidatedContext(brandId, queryEmbedding = null, topK = 12)
 }
 
 export default async function handler(req, res) {
-  // Config CORS
+  // 1. IMMEDIATE CORS & OPTIONS RESPONSE
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
 
   if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== "POST") return res.status(405).json({ error: "Only POST allowed" });
-
-  // --- AUTH VERIFICATION ---
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized: Missing or invalid token' });
-  }
-  const token = authHeader.split('Bearer ')[1];
-  let currentUser;
-  try {
-    currentUser = await admin.auth().verifyIdToken(token);
-  } catch (error) {
-    return res.status(401).json({ error: 'Unauthorized: Token verification failed' });
-  }
-  // -------------------------
-
-  console.log("--- RAG GENERATE REQUEST RECEIVED ---");
 
   try {
+    // 2. LAZY INIT
+    const { db } = initAdmin();
+
+    if (req.method !== "POST") return res.status(405).json({ error: "Only POST allowed" });
+
+    // --- AUTH VERIFICATION ---
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized: Missing or invalid token' });
+    }
+    const token = authHeader.split('Bearer ')[1];
+    let currentUser;
+    try {
+      currentUser = await admin.auth().verifyIdToken(token);
+    } catch (error) {
+      return res.status(401).json({ error: 'Unauthorized: Token verification failed' });
+    }
+    // -------------------------
+
+    console.log("--- RAG GENERATE REQUEST RECEIVED ---");
+
     const { brand, topic, platform, language, userText, systemPrompt, context } = req.body;
     console.log("Request Params:", { brandName: brand?.name, topic, platform, hasContext: !!context, hasSystemPrompt: !!systemPrompt });
 

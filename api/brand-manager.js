@@ -4,46 +4,54 @@ import fetch from "node-fetch";
 import busboy from 'busboy';
 import mammoth from 'mammoth';
 
-// Initialize Firebase Admin
-if (!admin.apps.length) {
-    admin.initializeApp({
-        credential: admin.credential.cert({
-            projectId: process.env.FIREBASE_PROJECT_ID,
-            clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-            privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-        }),
-        storageBucket: process.env.GOOGLE_STORAGE_BUCKET,
-    });
+let db = null;
+let bucket = null;
+
+function initAdmin() {
+    if (!admin.apps.length) {
+        admin.initializeApp({
+            credential: admin.credential.cert({
+                projectId: process.env.FIREBASE_PROJECT_ID,
+                clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+                privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+            }),
+            storageBucket: process.env.GOOGLE_STORAGE_BUCKET,
+        });
+    }
+    if (!db) db = admin.firestore();
+    if (!bucket) bucket = admin.storage().bucket();
+    return { db, bucket };
 }
 
-const db = admin.firestore();
-const bucket = admin.storage().bucket();
-
 export default async function handler(req, res) {
+    // 1. IMMEDIATE CORS & OPTIONS RESPONSE
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization");
 
     if (req.method === "OPTIONS") return res.status(200).end();
-    if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
-
-    // --- AUTH VERIFICATION ---
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return res.status(401).json({ error: 'Unauthorized' });
-    }
-    const token = authHeader.split('Bearer ')[1];
-    let decodedUser;
-    try {
-        decodedUser = await admin.auth().verifyIdToken(token);
-    } catch (error) {
-        return res.status(401).json({ error: 'Unauthorized: Token verification failed' });
-    }
-    const uid = decodedUser.uid;
-
-    const action = req.query.action;
 
     try {
+        // 2. LAZY INIT
+        const { db, bucket } = initAdmin();
+
+        if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+
+        // --- AUTH VERIFICATION ---
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res.status(401).json({ error: 'Unauthorized' });
+        }
+        const token = authHeader.split('Bearer ')[1];
+        let decodedUser;
+        try {
+            decodedUser = await admin.auth().verifyIdToken(token);
+        } catch (error) {
+            return res.status(401).json({ error: 'Unauthorized: Token verification failed' });
+        }
+        const uid = decodedUser.uid;
+        const action = req.query.action;
+
         switch (action) {
             case 'analyze-website':
                 return handleAnalyzeWebsite(req, res, uid);
@@ -59,7 +67,7 @@ export default async function handler(req, res) {
                 return res.status(400).json({ error: "Invalid action" });
         }
     } catch (error) {
-        console.error(`Error in brand-manager [${action}]:`, error);
+        console.error(`Error in brand-manager:`, error);
         return res.status(500).json({ error: error.message });
     }
 }

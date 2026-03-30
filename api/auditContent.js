@@ -2,56 +2,64 @@
 import admin from 'firebase-admin';
 import fetch from 'node-fetch';
 
-// Initialize Firebase Admin if needed
-if (!admin.apps.length) {
-  try {
-    admin.initializeApp({
-      credential: admin.credential.cert({
-        projectId: process.env.FIREBASE_PROJECT_ID,
-        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-      }),
-    });
-  } catch (error) {
-    console.error('Firebase admin init error', error);
-  }
-}
+let db = null;
 
-const db = admin.firestore();
+function initAdmin() {
+  if (!admin.apps.length) {
+    try {
+      admin.initializeApp({
+        credential: admin.credential.cert({
+          projectId: process.env.FIREBASE_PROJECT_ID,
+          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+          privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+        }),
+      });
+    } catch (error) {
+      console.error('Firebase admin init error', error);
+    }
+  }
+  if (!db) db = admin.firestore();
+  return { db };
+}
 import { performFullAudit } from '../auditUtils.js';
 
 export default async function handler(req, res) {
+  // 1. IMMEDIATE CORS & OPTIONS RESPONSE
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-
-  // --- AUTH VERIFICATION ---
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized: Missing or invalid token format' });
-  }
-
-  const parts = authHeader.split('Bearer ');
-  if (parts.length < 2) {
-    return res.status(401).json({ error: 'Unauthorized: Malformed token' });
-  }
-
-  const token = parts[1].trim();
-  let currentUser;
 
   try {
-    currentUser = await admin.auth().verifyIdToken(token);
-  } catch (error) {
-    console.error("Token verification failed:", error);
-    return res.status(401).json({ error: 'Unauthorized: Invalid token' });
-  }
+    // 2. LAZY INIT
+    const { db } = initAdmin();
 
-  const { text, language, platform, constructedPrompt } = req.body;
+    if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  try {
+    // --- AUTH VERIFICATION ---
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized: Missing or invalid token format' });
+    }
+
+    const parts = authHeader.split('Bearer ');
+    if (parts.length < 2) {
+      return res.status(401).json({ error: 'Unauthorized: Malformed token' });
+    }
+
+    const token = parts[1].trim();
+    let currentUser;
+
+    try {
+      currentUser = await admin.auth().verifyIdToken(token);
+    } catch (error) {
+      console.error("Token verification failed:", error);
+      return res.status(401).json({ error: 'Unauthorized: Invalid token' });
+    }
+
+    const { text, language, platform, constructedPrompt } = req.body;
+
     const { result, usage, errors: auditErrors } = await performFullAudit({ text, language, platform, constructedPrompt });
     
     let tokensLogic = usage.tokensLogic;
