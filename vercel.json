@@ -12,7 +12,7 @@
   ],
   "functions": {
     "api/**/*.js": {
-      "includeFiles": "node_modules/g*/build/src/**"
+      "includeFiles": "node_modules/g*/**"
     }
   }
 }
