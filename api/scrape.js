@@ -1,4 +1,5 @@
 import fetch from 'node-fetch';
+import "../firebaseForceDeps.js";
 import { parseHTML } from 'linkedom';
 import 'gaxios'; // Ghost import to force Vercel bundling
 import { Readability } from '@mozilla/readability';

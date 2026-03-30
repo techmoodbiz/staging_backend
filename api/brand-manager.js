@@ -2,6 +2,7 @@ import * as cheerio from "cheerio";
 import fetch from "node-fetch";
 import busboy from 'busboy';
 import mammoth from 'mammoth';
+import "../firebaseForceDeps.js";
 
 let admin = null;
 let db = null;
