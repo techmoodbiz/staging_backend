@@ -39,6 +39,9 @@
     "uuid": "^8.3.2"
   },
   "overrides": {
+    "gcp-metadata": "$gcp-metadata",
+    "google-auth-library": "$google-auth-library",
+    "google-gax": "$google-gax",
     "entities": "4.5.0",
     "htmlparser2": "9.1.0"
   }
