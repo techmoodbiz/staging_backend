@@ -1,4 +1,4 @@
-import "../firebaseForceDeps.js";
+import "./firebaseForceDeps.js";
 
 let admin = null;
 let db = null;

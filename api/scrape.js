@@ -1,5 +1,5 @@
 import fetch from 'node-fetch';
-import "../firebaseForceDeps.js";
+import "./firebaseForceDeps.js";
 import { parseHTML } from 'linkedom';
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';

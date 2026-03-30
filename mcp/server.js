@@ -8,7 +8,7 @@ import {
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import admin from "firebase-admin";
-import "../firebaseForceDeps.js";
+import "../api/firebaseForceDeps.js";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
