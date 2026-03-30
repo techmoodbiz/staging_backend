@@ -9,5 +9,27 @@
         { "key": "Access-Control-Allow-Headers", "value": "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization" }
       ]
     }
-  ]
+  ],
+  "builds": [
+    {
+      "src": "api/*.js",
+      "use": "@vercel/node",
+      "config": {
+        "includeFiles": [
+          "node_modules/gaxios/**",
+          "node_modules/gcp-metadata/**",
+          "node_modules/google-auth-library/**"
+        ]
+      }
+    }
+  ],
+  "functions": {
+    "api/seo.js": { "includeFiles": ["node_modules/gaxios/**", "node_modules/gcp-metadata/**", "node_modules/google-auth-library/**"] },
+    "api/users.js": { "includeFiles": ["node_modules/gaxios/**", "node_modules/gcp-metadata/**", "node_modules/google-auth-library/**"] },
+    "api/auditContent.js": { "includeFiles": ["node_modules/gaxios/**", "node_modules/gcp-metadata/**", "node_modules/google-auth-library/**"] },
+    "api/research.js": { "includeFiles": ["node_modules/gaxios/**", "node_modules/gcp-metadata/**", "node_modules/google-auth-library/**"] },
+    "api/brand-manager.js": { "includeFiles": ["node_modules/gaxios/**", "node_modules/gcp-metadata/**", "node_modules/google-auth-library/**"] },
+    "api/generateContent.js": { "includeFiles": ["node_modules/gaxios/**", "node_modules/gcp-metadata/**", "node_modules/google-auth-library/**"] },
+    "api/scrape.js": { "includeFiles": ["node_modules/gaxios/**", "node_modules/gcp-metadata/**", "node_modules/google-auth-library/**"] }
+  }
 }
