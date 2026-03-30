@@ -1,6 +1,7 @@
 import fetch from 'node-fetch';
-import { Gaxios } from 'gaxios'; 
-const _tracer = new Gaxios(); 
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const _tracer = require('gaxios'); // Force bundling and resolution of the CJS package
 
 let admin = null;
 let db = null;
