@@ -11,10 +11,7 @@
     }
   ],
   "functions": {
-    "api/*.js": {
-      "includeFiles": "node_modules/gaxios/**"
-    },
-    "mcp/**/*.js": {
+    "api/**/*.js": {
       "includeFiles": "node_modules/gaxios/**"
     }
   }
