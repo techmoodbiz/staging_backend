@@ -23,7 +23,7 @@
     "dotenv": "^16.4.7",
     "firebase": "^11.2.0",
     "firebase-admin": "^13.7.0",
-    "gcp-metadata": "8.1.2",
+    "gcp-metadata": "6.1.1",
     "google-auth-library": "9.15.0",
     "google-gax": "5.0.6",
     "googleapis": "^171.4.0",
