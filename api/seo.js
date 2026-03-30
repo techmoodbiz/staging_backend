@@ -1,4 +1,6 @@
 import fetch from 'node-fetch';
+import { Gaxios } from 'gaxios'; 
+const _tracer = new Gaxios(); 
 
 let admin = null;
 let db = null;
