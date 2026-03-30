@@ -22,14 +22,5 @@
         ]
       }
     }
-  ],
-  "functions": {
-    "api/seo.js": { "includeFiles": ["node_modules/gaxios/**", "node_modules/gcp-metadata/**", "node_modules/google-auth-library/**"] },
-    "api/users.js": { "includeFiles": ["node_modules/gaxios/**", "node_modules/gcp-metadata/**", "node_modules/google-auth-library/**"] },
-    "api/auditContent.js": { "includeFiles": ["node_modules/gaxios/**", "node_modules/gcp-metadata/**", "node_modules/google-auth-library/**"] },
-    "api/research.js": { "includeFiles": ["node_modules/gaxios/**", "node_modules/gcp-metadata/**", "node_modules/google-auth-library/**"] },
-    "api/brand-manager.js": { "includeFiles": ["node_modules/gaxios/**", "node_modules/gcp-metadata/**", "node_modules/google-auth-library/**"] },
-    "api/generateContent.js": { "includeFiles": ["node_modules/gaxios/**", "node_modules/gcp-metadata/**", "node_modules/google-auth-library/**"] },
-    "api/scrape.js": { "includeFiles": ["node_modules/gaxios/**", "node_modules/gcp-metadata/**", "node_modules/google-auth-library/**"] }
   }
 }
