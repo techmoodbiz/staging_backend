@@ -1,5 +1,4 @@
 import fetch from 'node-fetch';
-import "./firebaseForceDeps.js";
 
 let admin = null;
 let db = null;
