@@ -3,53 +3,69 @@ import admin from 'firebase-admin';
 import { BigQuery } from '@google-cloud/bigquery';
 import { google } from 'googleapis';
 
-// Initialize Firebase Admin
-if (!admin.apps.length) {
-  try {
-    admin.initializeApp({
-      credential: admin.credential.cert({
-        projectId: process.env.FIREBASE_PROJECT_ID,
-        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-      }),
-    });
-  } catch (error) {
-    console.error('Firebase admin init error', error);
+let bq = null;
+let gsc = null;
+let ad = null;
+let aa = null;
+
+function initClients() {
+  if (!admin.apps.length) {
+    try {
+      admin.initializeApp({
+        credential: admin.credential.cert({
+          projectId: process.env.FIREBASE_PROJECT_ID,
+          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+          privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+        }),
+      });
+    } catch (error) {
+      console.error('Firebase admin init error', error);
+    }
   }
+
+  if (!bq) {
+    bq = new BigQuery({
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      location: process.env.BIGQUERY_LOCATION || 'asia-southeast1',
+      credentials: {
+        client_email: process.env.FIREBASE_CLIENT_EMAIL,
+        private_key: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+      }
+    });
+  }
+
+  if (!gsc || !ad || !aa) {
+    const oauth2Client = new google.auth.OAuth2(
+      process.env.GSC_CLIENT_ID,
+      process.env.GSC_CLIENT_SECRET
+    );
+    oauth2Client.setCredentials({
+      refresh_token: process.env.GSC_REFRESH_TOKEN
+    });
+
+    gsc = google.searchconsole({ version: 'v1', auth: oauth2Client });
+    ad = google.analyticsdata({ version: 'v1beta', auth: oauth2Client }); 
+    aa = google.analyticsadmin({ version: 'v1alpha', auth: oauth2Client });
+  }
+
+  return { bq, gsc, ad, aa, oauth2Client: gsc.context._options.auth }; 
 }
 
-const bqLocation = process.env.BIGQUERY_LOCATION || 'asia-southeast1';
-
-const bigquery = new BigQuery({
-  projectId: process.env.FIREBASE_PROJECT_ID,
-  location: bqLocation,
-  credentials: {
-    client_email: process.env.FIREBASE_CLIENT_EMAIL,
-    private_key: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-  }
-});
-
-// Initialize Search Console API with OAuth2 Refresh Token (from Tech Account)
-const oauth2Client = new google.auth.OAuth2(
-  process.env.GSC_CLIENT_ID,
-  process.env.GSC_CLIENT_SECRET
-);
-oauth2Client.setCredentials({
-  refresh_token: process.env.GSC_REFRESH_TOKEN
-});
-
-const searchconsole = google.searchconsole({ version: 'v1', auth: oauth2Client });
-const analyticsData = google.analyticsdata('v1beta'); // Using v1beta as it is often more stable in certain library versions
-const analyticsAdmin = google.analyticsadmin('v1alpha');
-
 export default async function handler(req, res) {
-  // CORS Configuration
+  // 1. IMMEDIATE CORS & OPTIONS RESPONSE
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
 
-  if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  try {
+    // 2. LAZY INIT CLIENTS
+    const { bq: bigquery, gsc: searchconsole, ad: analyticsData, aa: analyticsAdmin, oauth2Client } = initClients();
+
+    if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   // --- AUTH VERIFICATION ---
   const authHeader = req.headers.authorization;
@@ -76,6 +92,11 @@ export default async function handler(req, res) {
   } else {
     // Default to technical analysis
     return handleTechnical(req, res, url, userId);
+    }
+  } catch (error) {
+    console.error('CRITICAL SEO ERROR:', error);
+    // Ensure headers are set even in catch (though set at top)
+    return res.status(500).json({ error: error.message });
   }
 }
 
