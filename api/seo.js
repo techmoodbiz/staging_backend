@@ -69,6 +69,93 @@ async function initClients() {
   return { admin, db, bq, gsc, ad, aa, oauth2Client: auth }; 
 }
 
+function normalizeHostSegment(segment) {
+  if (!segment || typeof segment !== 'string') return '';
+  let s = segment.trim().toLowerCase();
+  s = s.replace(/^https?:\/\//, '');
+  s = s.split('/')[0].split(':')[0];
+  if (s.startsWith('www.')) s = s.slice(4);
+  return s;
+}
+
+function parseRequestUrlHost(url) {
+  try {
+    const u = new URL(String(url).trim());
+    return normalizeHostSegment(u.hostname);
+  } catch {
+    return null;
+  }
+}
+
+function hostBelongsToDomain(host, domainValue) {
+  const d = normalizeHostSegment(domainValue);
+  const h = normalizeHostSegment(host);
+  if (!d || !h) return false;
+  return h === d || h.endsWith('.' + d);
+}
+
+function brandCoversHost(brand, host) {
+  const candidates = [];
+  if (brand.domain) candidates.push(brand.domain);
+  if (brand.primaryDomain) candidates.push(brand.primaryDomain);
+  if (Array.isArray(brand.alternateDomains)) {
+    for (const ad of brand.alternateDomains) {
+      if (ad) candidates.push(ad);
+    }
+  }
+  return candidates.some((c) => hostBelongsToDomain(host, c));
+}
+
+function findBrandMatchingHost(brands, host) {
+  for (const b of brands) {
+    if (brandCoversHost(b, host)) return b;
+  }
+  return null;
+}
+
+async function fetchBrandsByIds(db, brandIds) {
+  const unique = [...new Set((brandIds || []).filter(Boolean))];
+  const out = [];
+  for (let i = 0; i < unique.length; i += 10) {
+    const batch = unique.slice(i, i + 10);
+    const refs = batch.map((id) => db.collection('brands').doc(id));
+    const snaps = await db.getAll(...refs);
+    for (const snap of snaps) {
+      if (snap.exists) out.push({ id: snap.id, ...snap.data() });
+    }
+  }
+  return out;
+}
+
+async function assertUserCanAccessSeoUrl(db, userData, url) {
+  const role = userData?.role;
+  if (role === 'admin') return { ok: true };
+
+  const host = parseRequestUrlHost(url);
+  if (!host) return { ok: false, status: 400, error: 'URL không hợp lệ.' };
+
+  let brandIds = [];
+  if (role === 'brand_owner') brandIds = userData.ownedBrandIds || [];
+  else if (role === 'content_creator') brandIds = userData.assignedBrandIds || [];
+  else return { ok: false, status: 403, error: 'Không có quyền sử dụng SEO Inspector.' };
+
+  if (!brandIds.length) {
+    return { ok: false, status: 403, error: 'Tài khoản chưa được gán brand.' };
+  }
+
+  const brands = await fetchBrandsByIds(db, brandIds);
+  const match = findBrandMatchingHost(brands, host);
+  if (!match) {
+    return {
+      ok: false,
+      status: 403,
+      error: 'URL không thuộc domain của brand bạn được phép. Hãy cấu hình trường domain trên brand hoặc kiểm tra URL.',
+    };
+  }
+
+  return { ok: true, brandId: match.id };
+}
+
 export default async function handler(req, res) {
   // 1. IMMEDIATE CORS & OPTIONS RESPONSE
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -80,7 +167,7 @@ export default async function handler(req, res) {
   try {
     // 2. LAZY INIT CLIENTS (Safe Load)
     const clients = await initClients();
-    const { admin, bq, gsc, ad, aa, oauth2Client } = clients;
+    const { admin, db, bq, gsc, ad, aa, oauth2Client } = clients;
 
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
@@ -98,15 +185,25 @@ export default async function handler(req, res) {
     }
     const userId = decodedToken.uid;
 
+    const userDoc = await db.collection('users').doc(userId).get();
+    const userData = userDoc.data();
+    if (!userData) {
+      return res.status(403).json({ error: 'Tài khoản không tồn tại trong hệ thống.' });
+    }
+
     const { url, action } = req.body;
     if (!url && action !== 'diagnostic') return res.status(400).json({ error: 'URL is required' });
 
     // ROUTING BASED ON ACTION - Pass clients explicitly
     if (action === 'analytics') {
+      const access = await assertUserCanAccessSeoUrl(db, userData, url);
+      if (!access.ok) return res.status(access.status).json({ error: access.error });
       return handleAnalytics(req, res, url, { gsc, ad, aa, oauth2Client });
     } else if (action === 'diagnostic') {
       return handleDiagnostic(req, res, { bq });
     } else {
+      const access = await assertUserCanAccessSeoUrl(db, userData, url);
+      if (!access.ok) return res.status(access.status).json({ error: access.error });
       return handleTechnical(req, res, url, userId, { admin });
     }
   } catch (error) {
