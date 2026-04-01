@@ -456,6 +456,15 @@ function buildAuditInsights(ga4, gsc) {
   return { healthFlags, auditActions };
 }
 
+function mapAiSummaryParsed(parsed, fallback) {
+  return {
+    enabled: true,
+    topPriorities: Array.isArray(parsed.topPriorities) ? parsed.topPriorities.slice(0, 3) : fallback.topPriorities,
+    expectedImpact: parsed.expectedImpact || fallback.expectedImpact,
+    quickWins48h: Array.isArray(parsed.quickWins48h) ? parsed.quickWins48h.slice(0, 5) : fallback.quickWins48h,
+  };
+}
+
 async function generateAiAuditSummary(url, dateRanges, ga4, gsc, auditActions) {
   const fallback = {
     enabled: false,
@@ -467,51 +476,73 @@ async function generateAiAuditSummary(url, dateRanges, ga4, gsc, auditActions) {
     quickWins48h: auditActions.slice(0, 3).map((a) => a.action),
   };
 
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return fallback;
+  const promptPayload = {
+    url,
+    compareWindow: `${dateRanges.current.start}..${dateRanges.current.end} vs ${dateRanges.previous.start}..${dateRanges.previous.end}`,
+    ga4,
+    gsc,
+    auditActions,
+  };
 
-  try {
-    const { default: OpenAI } = await import('openai');
-    const client = new OpenAI({ apiKey });
-
-    const promptPayload = {
-      url,
-      compareWindow: `${dateRanges.current.start}..${dateRanges.current.end} vs ${dateRanges.previous.start}..${dateRanges.previous.end}`,
-      ga4,
-      gsc,
-      auditActions,
-    };
-
-    const completion = await client.chat.completions.create({
-      model: process.env.SEO_AUDIT_AI_MODEL || 'gpt-4o-mini',
-      temperature: 0.2,
-      messages: [
-        {
-          role: 'system',
-          content: 'You are an SEO technical lead. Return compact JSON with keys: topPriorities(string[]), expectedImpact(string), quickWins48h(string[]).',
+  const geminiKey = process.env.GEMINI_API_KEY;
+  if (geminiKey) {
+    try {
+      const { GoogleGenerativeAI } = await import('@google/generative-ai');
+      const genAI = new GoogleGenerativeAI(geminiKey);
+      const modelName = process.env.SEO_AUDIT_AI_MODEL || 'gemini-1.5-flash';
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+        generationConfig: {
+          temperature: 0.2,
+          responseMimeType: 'application/json',
         },
-        {
-          role: 'user',
-          content: JSON.stringify(promptPayload),
-        },
-      ],
-      response_format: { type: 'json_object' },
-    });
+      });
 
-    const raw = completion?.choices?.[0]?.message?.content || '{}';
-    const parsed = JSON.parse(raw);
+      const prompt = `You are an SEO technical lead. Use only the JSON data below. Return valid JSON with exactly these keys: topPriorities (array of strings, max 3), expectedImpact (string), quickWins48h (array of strings, max 5). Language: concise Vietnamese.
 
-    return {
-      enabled: true,
-      source: 'openai',
-      topPriorities: Array.isArray(parsed.topPriorities) ? parsed.topPriorities.slice(0, 3) : fallback.topPriorities,
-      expectedImpact: parsed.expectedImpact || fallback.expectedImpact,
-      quickWins48h: Array.isArray(parsed.quickWins48h) ? parsed.quickWins48h.slice(0, 5) : fallback.quickWins48h,
-    };
-  } catch (e) {
-    console.warn('[warning] AI summary fallback:', e.message);
-    return fallback;
+DATA:
+${JSON.stringify(promptPayload)}`;
+
+      const result = await model.generateContent(prompt);
+      const raw = result?.response?.text?.() || '{}';
+      const parsed = JSON.parse(raw);
+      return { ...mapAiSummaryParsed(parsed, fallback), source: 'gemini' };
+    } catch (e) {
+      console.warn('[warning] Gemini AI summary failed:', e.message);
+    }
   }
+
+  const openaiKey = process.env.OPENAI_API_KEY;
+  if (openaiKey) {
+    try {
+      const { default: OpenAI } = await import('openai');
+      const client = new OpenAI({ apiKey: openaiKey });
+
+      const completion = await client.chat.completions.create({
+        model: process.env.SEO_AUDIT_OPENAI_MODEL || 'gpt-4o-mini',
+        temperature: 0.2,
+        messages: [
+          {
+            role: 'system',
+            content: 'You are an SEO technical lead. Return compact JSON with keys: topPriorities(string[]), expectedImpact(string), quickWins48h(string[]). Prefer concise Vietnamese.',
+          },
+          {
+            role: 'user',
+            content: JSON.stringify(promptPayload),
+          },
+        ],
+        response_format: { type: 'json_object' },
+      });
+
+      const raw = completion?.choices?.[0]?.message?.content || '{}';
+      const parsed = JSON.parse(raw);
+      return { ...mapAiSummaryParsed(parsed, fallback), source: 'openai' };
+    } catch (e) {
+      console.warn('[warning] OpenAI AI summary failed:', e.message);
+    }
+  }
+
+  return fallback;
 }
 
 async function handleAnalytics(req, res, url, { gsc: gscService, ad, aa, oauth2Client }) {
