@@ -516,7 +516,9 @@ async function generateAiAuditSummary(url, dateRanges, ga4, gsc, auditActions) {
     try {
       const { GoogleGenerativeAI } = await import('@google/generative-ai');
       const genAI = new GoogleGenerativeAI(geminiKey);
-      const modelName = process.env.SEO_AUDIT_AI_MODEL || 'gemini-1.5-flash';
+      // Match auditUtils.js / Generative Language API: gemini-1.5-flash often 404s on v1beta
+      const modelName =
+        process.env.SEO_AUDIT_AI_MODEL || process.env.GEMINI_MODEL || 'gemini-2.0-flash';
       const model = genAI.getGenerativeModel({
         model: modelName,
         generationConfig: {
