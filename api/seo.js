@@ -199,6 +199,13 @@ export default async function handler(req, res) {
       const access = await assertUserCanAccessSeoUrl(db, userData, url);
       if (!access.ok) return res.status(access.status).json({ error: access.error });
       return handleAnalytics(req, res, url, { gsc, ad, aa, oauth2Client });
+    } else if (action === 'site-insights') {
+      const access = await assertUserCanAccessSeoUrl(db, userData, url);
+      if (!access.ok) return res.status(access.status).json({ error: access.error });
+      if (userData.role !== 'admin' && userData.role !== 'brand_owner') {
+        return res.status(403).json({ error: 'Chỉ dành cho brand owner hoặc admin.' });
+      }
+      return handleSiteInsights(req, res, url, { gsc, ad, aa, oauth2Client });
     } else if (action === 'diagnostic') {
       return handleDiagnostic(req, res, { bq });
     } else {
@@ -338,6 +345,26 @@ function getDateRangesForComparison() {
   return {
     current: { start: toDateStr(currentStart), end: toDateStr(currentEnd) },
     previous: { start: toDateStr(previousStart), end: toDateStr(previousEnd) },
+  };
+}
+
+/** GSC-style: last 28 days (inclusive) vs previous 28 days */
+function getDateRanges28dWoW() {
+  const end = new Date();
+  end.setDate(end.getDate() - 1);
+
+  const curStart = new Date(end);
+  curStart.setDate(curStart.getDate() - 27);
+
+  const prevEnd = new Date(curStart);
+  prevEnd.setDate(prevEnd.getDate() - 1);
+
+  const prevStart = new Date(prevEnd);
+  prevStart.setDate(prevStart.getDate() - 27);
+
+  return {
+    current: { start: toDateStr(curStart), end: toDateStr(end) },
+    previous: { start: toDateStr(prevStart), end: toDateStr(prevEnd) },
   };
 }
 
@@ -543,6 +570,262 @@ ${JSON.stringify(promptPayload)}`;
   }
 
   return fallback;
+}
+
+function normalizeGscAggregateRow(row) {
+  if (!row) return { clicks: 0, impressions: 0, ctr: 0, avgPosition: 0 };
+  const clicks = row.clicks || 0;
+  const impressions = row.impressions || 0;
+  const ctrRaw = row.ctr;
+  const ctr = ctrRaw != null && ctrRaw !== ''
+    ? Number((Number(ctrRaw) * 100).toFixed(2))
+    : impressions > 0 ? Number(((clicks / impressions) * 100).toFixed(2)) : 0;
+  return {
+    clicks,
+    impressions,
+    ctr,
+    avgPosition: row.position != null ? Number(Number(row.position).toFixed(2)) : 0,
+  };
+}
+
+async function handleSiteInsights(req, res, url, { gsc: gscService, ad, aa, oauth2Client }) {
+  try {
+    const dateRanges = getDateRanges28dWoW();
+    const gscSite = {
+      current: { clicks: 0, impressions: 0, ctr: 0, avgPosition: 0 },
+      previous: { clicks: 0, impressions: 0, ctr: 0, avgPosition: 0 },
+      deltaPct: {},
+    };
+    const ga4Site = {
+      current: { pageviews: 0, totalUsers: 0, sessions: 0 },
+      previous: { pageviews: 0, totalUsers: 0, sessions: 0 },
+      deltaPct: {},
+    };
+
+    const ga4MetricAt = (ga4Resp, i) => Number(ga4Resp?.data?.rows?.[0]?.metricValues?.[i]?.value || 0);
+
+    try {
+      const urlObj = new URL(url);
+      const host = urlObj.hostname;
+      const summariesResp = await aa.accountSummaries.list({ auth: oauth2Client });
+      const summaries = summariesResp.data.accountSummaries || [];
+      let propertyId = null;
+      for (const account of summaries) {
+        for (const prop of (account.propertySummaries || [])) {
+          if (prop.displayName.includes(host) || host.includes(prop.displayName.replace('https://', '').replace('http://', ''))) {
+            propertyId = prop.property.replace('properties/', '');
+            break;
+          }
+        }
+        if (propertyId) break;
+      }
+
+      if (propertyId) {
+        const runGa4Site = async (startDate, endDate) => {
+          const ga4Resp = await ad.properties.runReport({
+            auth: oauth2Client,
+            property: `properties/${propertyId}`,
+            requestBody: {
+              dateRanges: [{ startDate, endDate }],
+              metrics: [
+                { name: 'screenPageViews' },
+                { name: 'totalUsers' },
+                { name: 'sessions' },
+              ],
+            },
+          });
+          return {
+            pageviews: ga4MetricAt(ga4Resp, 0),
+            totalUsers: ga4MetricAt(ga4Resp, 1),
+            sessions: ga4MetricAt(ga4Resp, 2),
+          };
+        };
+        const [c, p] = await Promise.all([
+          runGa4Site(dateRanges.current.start, dateRanges.current.end),
+          runGa4Site(dateRanges.previous.start, dateRanges.previous.end),
+        ]);
+        ga4Site.current = c;
+        ga4Site.previous = p;
+        ga4Site.deltaPct = buildDeltaMap(ga4Site.current, ga4Site.previous, ['pageviews', 'totalUsers', 'sessions']);
+      }
+    } catch (e) {
+      console.warn(`[warning] site-insights GA4: ${e.message}`);
+    }
+
+    let topPages = [];
+    let trendingUp = [];
+    let trendingDown = [];
+
+    try {
+      const sitesResp = await gscService.sites.list();
+      const siteEntries = sitesResp.data.siteEntry || [];
+      let siteUrl = null;
+      const sortedSites = siteEntries.sort((a, b) => b.siteUrl.length - a.siteUrl.length);
+      for (const s of sortedSites) {
+        const cleanS = s.siteUrl.startsWith('sc-domain:') ? s.siteUrl.replace('sc-domain:', '') : s.siteUrl;
+        if (url.includes(cleanS)) {
+          siteUrl = s.siteUrl;
+          break;
+        }
+      }
+
+      if (!siteUrl) {
+        console.warn(`[warning] site-insights: no GSC property for ${url}`);
+        return res.status(200).json({
+          success: true,
+          data: {
+            compareWindow: '28d_vs_prev28d',
+            dateRanges,
+            gscSite,
+            ga4Site,
+            topPages,
+            trendingUp,
+            trendingDown,
+            gscPropertyFound: false,
+          },
+        });
+      }
+
+      const rowLimit = 250;
+      const [aggCurr, aggPrev, pageCurr, pagePrev] = await Promise.all([
+        gscService.searchanalytics.query({
+          auth: oauth2Client,
+          siteUrl,
+          requestBody: {
+            startDate: dateRanges.current.start,
+            endDate: dateRanges.current.end,
+          },
+        }),
+        gscService.searchanalytics.query({
+          auth: oauth2Client,
+          siteUrl,
+          requestBody: {
+            startDate: dateRanges.previous.start,
+            endDate: dateRanges.previous.end,
+          },
+        }),
+        gscService.searchanalytics.query({
+          auth: oauth2Client,
+          siteUrl,
+          requestBody: {
+            startDate: dateRanges.current.start,
+            endDate: dateRanges.current.end,
+            dimensions: ['page'],
+            rowLimit,
+          },
+        }),
+        gscService.searchanalytics.query({
+          auth: oauth2Client,
+          siteUrl,
+          requestBody: {
+            startDate: dateRanges.previous.start,
+            endDate: dateRanges.previous.end,
+            dimensions: ['page'],
+            rowLimit,
+          },
+        }),
+      ]);
+
+      gscSite.current = normalizeGscAggregateRow(aggCurr.data.rows?.[0]);
+      gscSite.previous = normalizeGscAggregateRow(aggPrev.data.rows?.[0]);
+      gscSite.deltaPct = buildDeltaMap(gscSite.current, gscSite.previous, ['clicks', 'impressions', 'ctr', 'avgPosition']);
+
+      const pageRowMetrics = (row) => normalizeGscAggregateRow(row);
+
+      const currMap = new Map();
+      for (const row of pageCurr.data.rows || []) {
+        const pageKey = row.keys?.[0];
+        if (!pageKey) continue;
+        currMap.set(pageKey, pageRowMetrics(row));
+      }
+      const prevMap = new Map();
+      for (const row of pagePrev.data.rows || []) {
+        const pageKey = row.keys?.[0];
+        if (!pageKey) continue;
+        prevMap.set(pageKey, pageRowMetrics(row));
+      }
+
+      const allUrls = new Set([...currMap.keys(), ...prevMap.keys()]);
+      const merged = [];
+      for (const pageKey of allUrls) {
+        const cur = currMap.get(pageKey) || { clicks: 0, impressions: 0, ctr: 0, avgPosition: 0 };
+        const prev = prevMap.get(pageKey) || { clicks: 0, impressions: 0, ctr: 0, avgPosition: 0 };
+        const deltaPctClicks = calcDeltaPct(cur.clicks, prev.clicks);
+        merged.push({
+          page: pageKey,
+          clicks: cur.clicks,
+          impressions: cur.impressions,
+          ctr: cur.ctr,
+          avgPosition: cur.avgPosition,
+          previousClicks: prev.clicks,
+          deltaPctClicks,
+        });
+      }
+
+      topPages = [...merged]
+        .sort((a, b) => b.clicks - a.clicks)
+        .slice(0, 20);
+
+      const upCandidates = merged.filter((m) => {
+        if (m.clicks === 0 && m.previousClicks === 0) return false;
+        if (m.previousClicks === 0 && m.clicks > 0) return true;
+        return m.deltaPctClicks != null && m.deltaPctClicks > 0;
+      });
+      trendingUp = upCandidates
+        .sort((a, b) => {
+          const score = (x) => {
+            if (x.previousClicks === 0 && x.clicks > 0) return 1e12 + x.clicks;
+            if (x.deltaPctClicks == null) return -1;
+            return x.deltaPctClicks;
+          };
+          return score(b) - score(a);
+        })
+        .slice(0, 15);
+
+      const downCandidates = merged.filter((m) => m.previousClicks > 0 && m.clicks < m.previousClicks);
+      trendingDown = downCandidates
+        .sort((a, b) => {
+          const da = a.deltaPctClicks != null ? a.deltaPctClicks : 0;
+          const db = b.deltaPctClicks != null ? b.deltaPctClicks : 0;
+          return da - db;
+        })
+        .slice(0, 15);
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          compareWindow: '28d_vs_prev28d',
+          dateRanges,
+          gscSite,
+          ga4Site,
+          topPages,
+          trendingUp,
+          trendingDown,
+          gscPropertyFound: true,
+          gscSiteUrl: siteUrl,
+        },
+      });
+    } catch (e) {
+      console.warn(`[warning] site-insights GSC: ${e.message}`);
+      return res.status(200).json({
+        success: true,
+        data: {
+          compareWindow: '28d_vs_prev28d',
+          dateRanges,
+          gscSite,
+          ga4Site,
+          topPages,
+          trendingUp,
+          trendingDown,
+          gscPropertyFound: false,
+          gscError: e.message,
+        },
+      });
+    }
+  } catch (error) {
+    console.error('Lỗi handleSiteInsights:', error);
+    return res.status(500).json({ error: 'Lỗi site insights: ' + error.message });
+  }
 }
 
 async function handleAnalytics(req, res, url, { gsc: gscService, ad, aa, oauth2Client }) {
