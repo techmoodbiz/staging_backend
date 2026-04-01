@@ -318,7 +318,203 @@ async function handleTechnical(req, res, url, userId, { admin }) {
   }
 }
 
-async function handleAnalytics(req, res, url, { gsc, ad, aa, oauth2Client }) {
+function toDateStr(d) {
+  return d.toISOString().split('T')[0];
+}
+
+function getDateRangesForComparison() {
+  const currentEnd = new Date();
+  currentEnd.setDate(currentEnd.getDate() - 1);
+
+  const currentStart = new Date(currentEnd);
+  currentStart.setDate(currentStart.getDate() - 6);
+
+  const previousEnd = new Date(currentStart);
+  previousEnd.setDate(previousEnd.getDate() - 1);
+
+  const previousStart = new Date(previousEnd);
+  previousStart.setDate(previousStart.getDate() - 6);
+
+  return {
+    current: { start: toDateStr(currentStart), end: toDateStr(currentEnd) },
+    previous: { start: toDateStr(previousStart), end: toDateStr(previousEnd) },
+  };
+}
+
+function calcDeltaPct(current, previous) {
+  const c = Number(current || 0);
+  const p = Number(previous || 0);
+  if (p === 0) return c === 0 ? 0 : null;
+  return Number((((c - p) / p) * 100).toFixed(2));
+}
+
+function metricTrend(deltaPct, threshold = 5) {
+  if (deltaPct === null) return 'insufficient_data';
+  if (deltaPct > threshold) return 'up';
+  if (deltaPct < -threshold) return 'down';
+  return 'flat';
+}
+
+function buildDeltaMap(currentObj, previousObj, keys) {
+  const out = {};
+  for (const k of keys) {
+    out[k] = calcDeltaPct(currentObj[k], previousObj[k]);
+  }
+  return out;
+}
+
+function pushAction(auditActions, priority, key, title, why, action) {
+  auditActions.push({ priority, key, title, why, action });
+}
+
+function buildAuditInsights(ga4, gsc) {
+  const healthFlags = [];
+  const auditActions = [];
+
+  const gscClicksDrop = gsc.deltaPct.clicks != null && gsc.deltaPct.clicks < -10;
+  const gscImprUp = gsc.deltaPct.impressions != null && gsc.deltaPct.impressions > 10;
+  const gscCtrDrop = gsc.deltaPct.ctr != null && gsc.deltaPct.ctr < -10;
+  const gscPosDrop = gsc.deltaPct.avgPosition != null && gsc.deltaPct.avgPosition > 8;
+  const ga4TrafficDrop = ga4.deltaPct.pageviews != null && ga4.deltaPct.pageviews < -12;
+  const ga4SessionUpButEngDown =
+    ga4.deltaPct.sessions != null &&
+    ga4.deltaPct.sessions > 10 &&
+    ga4.deltaPct.engagementSeconds != null &&
+    ga4.deltaPct.engagementSeconds < -8;
+
+  if (gscClicksDrop && gscImprUp) {
+    healthFlags.push('ctr_gap');
+    pushAction(
+      auditActions,
+      'high',
+      'ctr_gap',
+      'Impression tăng nhưng click giảm',
+      'Nội dung đang được hiển thị nhiều hơn nhưng snippet/title chưa đủ hấp dẫn.',
+      'Audit title/meta description, thêm intent keyword ở đầu title, test rich-result eligibility.'
+    );
+  }
+
+  if (gscPosDrop) {
+    healthFlags.push('ranking_decline');
+    pushAction(
+      auditActions,
+      'high',
+      'ranking_decline',
+      'Vị trí trung bình đang xấu đi',
+      'Trang có dấu hiệu tụt hạng trong 7 ngày gần đây.',
+      'Kiểm tra cannibalization, cập nhật internal links từ trang trụ cột, rà lại intent mismatch.'
+    );
+  }
+
+  if (ga4TrafficDrop && gscClicksDrop) {
+    healthFlags.push('traffic_drop');
+    pushAction(
+      auditActions,
+      'high',
+      'traffic_drop',
+      'Traffic giảm đồng thời ở GA4 và GSC',
+      'Suy giảm có thể đến từ SERP loss hoặc technical degradation.',
+      'Ưu tiên crawlability/indexability, kiểm tra coverage/search console issues và log server.'
+    );
+  }
+
+  if (ga4SessionUpButEngDown) {
+    healthFlags.push('engagement_quality_drop');
+    pushAction(
+      auditActions,
+      'medium',
+      'engagement_quality_drop',
+      'Session tăng nhưng chất lượng tương tác giảm',
+      'Có thể traffic kém phù hợp intent hoặc UX chưa tối ưu.',
+      'Audit speed/CWV, above-the-fold, CTA placement và sự khớp nội dung với query chính.'
+    );
+  }
+
+  if (gscCtrDrop && !healthFlags.includes('ctr_gap')) {
+    healthFlags.push('ctr_decline');
+    pushAction(
+      auditActions,
+      'medium',
+      'ctr_decline',
+      'CTR giảm đáng kể',
+      'Snippet cạnh tranh kém trong SERP dù vẫn còn impression.',
+      'Viết lại title với lợi ích định lượng, tối ưu meta description theo search intent.'
+    );
+  }
+
+  if (!auditActions.length) {
+    pushAction(
+      auditActions,
+      'low',
+      'stable_monitoring',
+      'Xu hướng đang ổn định',
+      'Biến động chưa vượt ngưỡng cảnh báo của hệ thống.',
+      'Tiếp tục theo dõi tuần tới và thử tối ưu incremental ở title/H1/internal links.'
+    );
+  }
+
+  return { healthFlags, auditActions };
+}
+
+async function generateAiAuditSummary(url, dateRanges, ga4, gsc, auditActions) {
+  const fallback = {
+    enabled: false,
+    source: 'fallback',
+    topPriorities: auditActions.slice(0, 3).map((a) => a.title),
+    expectedImpact: auditActions[0]?.priority === 'high'
+      ? 'Nếu xử lý ưu tiên cao trước, khả năng cải thiện CTR/traffic trong 1-2 chu kỳ index là khả thi.'
+      : 'Giữ nhịp tối ưu đều để cải thiện dần chất lượng traffic và ổn định thứ hạng.',
+    quickWins48h: auditActions.slice(0, 3).map((a) => a.action),
+  };
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return fallback;
+
+  try {
+    const { default: OpenAI } = await import('openai');
+    const client = new OpenAI({ apiKey });
+
+    const promptPayload = {
+      url,
+      compareWindow: `${dateRanges.current.start}..${dateRanges.current.end} vs ${dateRanges.previous.start}..${dateRanges.previous.end}`,
+      ga4,
+      gsc,
+      auditActions,
+    };
+
+    const completion = await client.chat.completions.create({
+      model: process.env.SEO_AUDIT_AI_MODEL || 'gpt-4o-mini',
+      temperature: 0.2,
+      messages: [
+        {
+          role: 'system',
+          content: 'You are an SEO technical lead. Return compact JSON with keys: topPriorities(string[]), expectedImpact(string), quickWins48h(string[]).',
+        },
+        {
+          role: 'user',
+          content: JSON.stringify(promptPayload),
+        },
+      ],
+      response_format: { type: 'json_object' },
+    });
+
+    const raw = completion?.choices?.[0]?.message?.content || '{}';
+    const parsed = JSON.parse(raw);
+
+    return {
+      enabled: true,
+      source: 'openai',
+      topPriorities: Array.isArray(parsed.topPriorities) ? parsed.topPriorities.slice(0, 3) : fallback.topPriorities,
+      expectedImpact: parsed.expectedImpact || fallback.expectedImpact,
+      quickWins48h: Array.isArray(parsed.quickWins48h) ? parsed.quickWins48h.slice(0, 5) : fallback.quickWins48h,
+    };
+  } catch (e) {
+    console.warn('[warning] AI summary fallback:', e.message);
+    return fallback;
+  }
+}
+
+async function handleAnalytics(req, res, url, { gsc: gscService, ad, aa, oauth2Client }) {
   try {
     const GA4_DATASET = process.env.GA4_DATASET_ID;
     const GSC_DATASET = process.env.GSC_DATASET_ID;
@@ -328,12 +524,19 @@ async function handleAnalytics(req, res, url, { gsc, ad, aa, oauth2Client }) {
     if (!GSC_DATASET) return res.status(200).json({ success: false, error: 'Thiếu cấu hình GSC_DATASET_ID trên Vercel.' });
     if (!PROJECT_ID) return res.status(200).json({ success: false, error: 'Thiếu cấu hình FIREBASE_PROJECT_ID trên Vercel.' });
 
-    let pageviews = 0;
-    let totalUsers = 0;
-    let sessions = 0;
-    let engagementSeconds = 0;
-    let eventCount = 0;
-    let gscResults = { clicks: 0, impressions: 0, avg_position: 0, ctr: 0 };
+    const dateRanges = getDateRangesForComparison();
+    const ga4 = {
+      current: { pageviews: 0, totalUsers: 0, sessions: 0, engagementSeconds: 0, eventCount: 0 },
+      previous: { pageviews: 0, totalUsers: 0, sessions: 0, engagementSeconds: 0, eventCount: 0 },
+      deltaPct: {},
+      trend: {},
+    };
+    const gsc = {
+      current: { clicks: 0, impressions: 0, ctr: 0, avgPosition: 0 },
+      previous: { clicks: 0, impressions: 0, ctr: 0, avgPosition: 0 },
+      deltaPct: {},
+      trend: {},
+    };
     let topQueries = [];
     let clicksByDevice = [];
 
@@ -362,11 +565,12 @@ async function handleAnalytics(req, res, url, { gsc, ad, aa, oauth2Client }) {
         }
 
         if (propertyId) {
-            const ga4Resp = await ad.properties.runReport({
+            const runGa4 = async (startDate, endDate) => {
+              const ga4Resp = await ad.properties.runReport({
                 auth: oauth2Client,
                 property: `properties/${propertyId}`,
                 requestBody: {
-                    dateRanges: [{ startDate: '30daysAgo', endDate: 'yesterday' }],
+                    dateRanges: [{ startDate, endDate }],
                     dimensions: [{ name: 'pageLocation' }],
                     metrics: [
                         { name: 'screenPageViews' },
@@ -385,13 +589,22 @@ async function handleAnalytics(req, res, url, { gsc, ad, aa, oauth2Client }) {
                         }
                     }
                 }
-            });
+              });
+              return {
+                pageviews: ga4MetricAt(ga4Resp, 0),
+                totalUsers: ga4MetricAt(ga4Resp, 1),
+                sessions: ga4MetricAt(ga4Resp, 2),
+                engagementSeconds: Number(ga4MetricAt(ga4Resp, 3).toFixed(1)),
+                eventCount: ga4MetricAt(ga4Resp, 4),
+              };
+            };
 
-            pageviews = ga4MetricAt(ga4Resp, 0);
-            totalUsers = ga4MetricAt(ga4Resp, 1);
-            sessions = ga4MetricAt(ga4Resp, 2);
-            engagementSeconds = ga4MetricAt(ga4Resp, 3);
-            eventCount = ga4MetricAt(ga4Resp, 4);
+            const [ga4Current, ga4Previous] = await Promise.all([
+              runGa4(dateRanges.current.start, dateRanges.current.end),
+              runGa4(dateRanges.previous.start, dateRanges.previous.end),
+            ]);
+            ga4.current = ga4Current;
+            ga4.previous = ga4Previous;
         } else {
             console.warn(`[warning] No matching GA4 property found for host: ${host}`);
         }
@@ -405,7 +618,7 @@ async function handleAnalytics(req, res, url, { gsc, ad, aa, oauth2Client }) {
         // Instead of BigQuery, we use the Search Console API which supports 1000+ sites naturally
         
         // 1. Find the best matching site property
-        const sitesResp = await gsc.sites.list();
+        const sitesResp = await gscService.sites.list();
         const siteEntries = sitesResp.data.siteEntry || [];
         
         // Find property that matches the URL
@@ -420,13 +633,6 @@ async function handleAnalytics(req, res, url, { gsc, ad, aa, oauth2Client }) {
         }
 
         if (siteUrl) {
-            const endDate = new Date();
-            endDate.setDate(endDate.getDate() - 1); // GSC usually has 1-day lag
-            const startDate = new Date();
-            startDate.setDate(startDate.getDate() - 30);
-            const startStr = startDate.toISOString().split('T')[0];
-            const endStr = endDate.toISOString().split('T')[0];
-
             const pageFilter = {
                 dimensionFilterGroups: [{
                     filters: [{
@@ -437,34 +643,37 @@ async function handleAnalytics(req, res, url, { gsc, ad, aa, oauth2Client }) {
                 }]
             };
 
-            const [gscResp, gscQueriesResp, gscDeviceResp] = await Promise.all([
-                gsc.searchanalytics.query({
+            const runGscPageWindow = async (startDate, endDate) => gscService.searchanalytics.query({
+              auth: oauth2Client,
+              siteUrl,
+              requestBody: {
+                startDate,
+                endDate,
+                dimensions: ['page'],
+                ...pageFilter,
+              },
+            });
+
+            const [gscCurrentResp, gscPreviousResp, gscQueriesResp, gscDeviceResp] = await Promise.all([
+                runGscPageWindow(dateRanges.current.start, dateRanges.current.end),
+                runGscPageWindow(dateRanges.previous.start, dateRanges.previous.end),
+                gscService.searchanalytics.query({
                     auth: oauth2Client,
                     siteUrl: siteUrl,
                     requestBody: {
-                        startDate: startStr,
-                        endDate: endStr,
-                        dimensions: ['page'],
-                        ...pageFilter,
-                    }
-                }),
-                gsc.searchanalytics.query({
-                    auth: oauth2Client,
-                    siteUrl: siteUrl,
-                    requestBody: {
-                        startDate: startStr,
-                        endDate: endStr,
+                        startDate: dateRanges.current.start,
+                        endDate: dateRanges.current.end,
                         dimensions: ['query'],
                         ...pageFilter,
                         rowLimit: 10,
                     }
                 }),
-                gsc.searchanalytics.query({
+                gscService.searchanalytics.query({
                     auth: oauth2Client,
                     siteUrl: siteUrl,
                     requestBody: {
-                        startDate: startStr,
-                        endDate: endStr,
+                        startDate: dateRanges.current.start,
+                        endDate: dateRanges.current.end,
                         dimensions: ['device'],
                         ...pageFilter,
                         rowLimit: 10,
@@ -472,21 +681,24 @@ async function handleAnalytics(req, res, url, { gsc, ad, aa, oauth2Client }) {
                 }),
             ]);
 
-            const row = gscResp.data.rows?.[0];
-            if (row) {
-                const clicks = row.clicks || 0;
-                const impressions = row.impressions || 0;
-                const ctrRaw = row.ctr;
-                const ctrPct = ctrRaw != null && ctrRaw !== ''
-                    ? Number((Number(ctrRaw) * 100).toFixed(2))
-                    : impressions > 0 ? Number(((clicks / impressions) * 100).toFixed(2)) : 0;
-                gscResults = {
-                    clicks,
-                    impressions,
-                    avg_position: row.position || 0,
-                    ctr: ctrPct,
-                };
-            }
+            const normalizeGsc = (row) => {
+              if (!row) return { clicks: 0, impressions: 0, ctr: 0, avgPosition: 0 };
+              const clicks = row.clicks || 0;
+              const impressions = row.impressions || 0;
+              const ctrRaw = row.ctr;
+              const ctr = ctrRaw != null && ctrRaw !== ''
+                ? Number((Number(ctrRaw) * 100).toFixed(2))
+                : impressions > 0 ? Number(((clicks / impressions) * 100).toFixed(2)) : 0;
+              return {
+                clicks,
+                impressions,
+                ctr,
+                avgPosition: row.position != null ? Number(Number(row.position).toFixed(2)) : 0,
+              };
+            };
+
+            gsc.current = normalizeGsc(gscCurrentResp.data.rows?.[0]);
+            gsc.previous = normalizeGsc(gscPreviousResp.data.rows?.[0]);
 
             const qRows = gscQueriesResp.data.rows || [];
             qRows.sort((a, b) => (b.clicks || 0) - (a.clicks || 0));
@@ -518,20 +730,47 @@ async function handleAnalytics(req, res, url, { gsc, ad, aa, oauth2Client }) {
         console.log(`Hint: Ensure the service account has 'Viewer' access to the GSC property.`);
     }
 
+    ga4.deltaPct = buildDeltaMap(ga4.current, ga4.previous, ['pageviews', 'totalUsers', 'sessions', 'engagementSeconds', 'eventCount']);
+    gsc.deltaPct = buildDeltaMap(gsc.current, gsc.previous, ['clicks', 'impressions', 'ctr', 'avgPosition']);
+    ga4.trend = {
+      pageviews: metricTrend(ga4.deltaPct.pageviews),
+      totalUsers: metricTrend(ga4.deltaPct.totalUsers),
+      sessions: metricTrend(ga4.deltaPct.sessions),
+      engagementSeconds: metricTrend(ga4.deltaPct.engagementSeconds),
+      eventCount: metricTrend(ga4.deltaPct.eventCount),
+    };
+    gsc.trend = {
+      clicks: metricTrend(gsc.deltaPct.clicks),
+      impressions: metricTrend(gsc.deltaPct.impressions),
+      ctr: metricTrend(gsc.deltaPct.ctr),
+      avgPosition: metricTrend(gsc.deltaPct.avgPosition, 8),
+    };
+
+    const { healthFlags, auditActions } = buildAuditInsights(ga4, gsc);
+    const aiSummary = await generateAiAuditSummary(url, dateRanges, ga4, gsc, auditActions);
+
     return res.status(200).json({
       success: true,
       data: {
-        pageviews,
-        totalUsers,
-        sessions,
-        engagementSeconds: Number(engagementSeconds.toFixed(1)),
-        eventCount,
-        clicks: gscResults.clicks || 0,
-        impressions: gscResults.impressions || 0,
-        avgPosition: gscResults.avg_position ? Number(Number(gscResults.avg_position).toFixed(2)) : 0,
-        ctr: gscResults.ctr || 0,
+        compareWindow: '7d_vs_prev7d',
+        dateRanges,
+        ga4,
+        gsc,
         topQueries,
         clicksByDevice,
+        healthFlags,
+        auditActions,
+        aiSummary,
+        // Backward-compatible fields for existing consumers
+        pageviews: ga4.current.pageviews,
+        totalUsers: ga4.current.totalUsers,
+        sessions: ga4.current.sessions,
+        engagementSeconds: ga4.current.engagementSeconds,
+        eventCount: ga4.current.eventCount,
+        clicks: gsc.current.clicks,
+        impressions: gsc.current.impressions,
+        avgPosition: gsc.current.avgPosition,
+        ctr: gsc.current.ctr,
       }
     });
 
