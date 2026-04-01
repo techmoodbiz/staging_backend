@@ -882,7 +882,7 @@ async function handleAnalytics(req, res, url, { gsc: gscService, ad, aa, oauth2C
 
         if (propertyId) {
             const runGa4 = async (startDate, endDate) => {
-              const ga4Resp = await ad.properties.runReport({
+            const ga4Resp = await ad.properties.runReport({
                 auth: oauth2Client,
                 property: `properties/${propertyId}`,
                 requestBody: {
@@ -905,7 +905,7 @@ async function handleAnalytics(req, res, url, { gsc: gscService, ad, aa, oauth2C
                         }
                     }
                 }
-              });
+            });
               return {
                 pageviews: ga4MetricAt(ga4Resp, 0),
                 totalUsers: ga4MetricAt(ga4Resp, 1),
@@ -950,13 +950,13 @@ async function handleAnalytics(req, res, url, { gsc: gscService, ad, aa, oauth2C
 
         if (siteUrl) {
             const pageFilter = {
-                dimensionFilterGroups: [{
-                    filters: [{
-                        dimension: 'page',
-                        operator: 'equals',
-                        expression: url
+                    dimensionFilterGroups: [{
+                        filters: [{
+                            dimension: 'page',
+                            operator: 'equals',
+                            expression: url
+                        }]
                     }]
-                }]
             };
 
             const runGscPageWindow = async (startDate, endDate) => gscService.searchanalytics.query({
