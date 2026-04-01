@@ -329,7 +329,15 @@ async function handleAnalytics(req, res, url, { gsc, ad, aa, oauth2Client }) {
     if (!PROJECT_ID) return res.status(200).json({ success: false, error: 'Thiếu cấu hình FIREBASE_PROJECT_ID trên Vercel.' });
 
     let pageviews = 0;
-    let gscResults = { clicks: 0, impressions: 0, avg_position: 0 };
+    let totalUsers = 0;
+    let sessions = 0;
+    let engagementSeconds = 0;
+    let eventCount = 0;
+    let gscResults = { clicks: 0, impressions: 0, avg_position: 0, ctr: 0 };
+    let topQueries = [];
+    let clicksByDevice = [];
+
+    const ga4MetricAt = (ga4Resp, i) => Number(ga4Resp?.data?.rows?.[0]?.metricValues?.[i]?.value || 0);
 
     // --- GA4 API MIGRATION ---
     try {
@@ -360,7 +368,13 @@ async function handleAnalytics(req, res, url, { gsc, ad, aa, oauth2Client }) {
                 requestBody: {
                     dateRanges: [{ startDate: '30daysAgo', endDate: 'yesterday' }],
                     dimensions: [{ name: 'pageLocation' }],
-                    metrics: [{ name: 'screenPageViews' }],
+                    metrics: [
+                        { name: 'screenPageViews' },
+                        { name: 'totalUsers' },
+                        { name: 'sessions' },
+                        { name: 'userEngagementDuration' },
+                        { name: 'eventCount' },
+                    ],
                     dimensionFilter: {
                         filter: {
                             fieldName: 'pageLocation',
@@ -373,7 +387,11 @@ async function handleAnalytics(req, res, url, { gsc, ad, aa, oauth2Client }) {
                 }
             });
 
-            pageviews = Number(ga4Resp.data.rows?.[0]?.metricValues?.[0]?.value || 0);
+            pageviews = ga4MetricAt(ga4Resp, 0);
+            totalUsers = ga4MetricAt(ga4Resp, 1);
+            sessions = ga4MetricAt(ga4Resp, 2);
+            engagementSeconds = ga4MetricAt(ga4Resp, 3);
+            eventCount = ga4MetricAt(ga4Resp, 4);
         } else {
             console.warn(`[warning] No matching GA4 property found for host: ${host}`);
         }
@@ -406,32 +424,92 @@ async function handleAnalytics(req, res, url, { gsc, ad, aa, oauth2Client }) {
             endDate.setDate(endDate.getDate() - 1); // GSC usually has 1-day lag
             const startDate = new Date();
             startDate.setDate(startDate.getDate() - 30);
+            const startStr = startDate.toISOString().split('T')[0];
+            const endStr = endDate.toISOString().split('T')[0];
 
-            const gscResp = await gsc.searchanalytics.query({
-                auth: oauth2Client,
-                siteUrl: siteUrl,
-                requestBody: {
-                    startDate: startDate.toISOString().split('T')[0],
-                    endDate: endDate.toISOString().split('T')[0],
-                    dimensions: ['page'],
-                    dimensionFilterGroups: [{
-                        filters: [{
-                            dimension: 'page',
-                            operator: 'equals',
-                            expression: url
-                        }]
+            const pageFilter = {
+                dimensionFilterGroups: [{
+                    filters: [{
+                        dimension: 'page',
+                        operator: 'equals',
+                        expression: url
                     }]
-                }
-            });
+                }]
+            };
+
+            const [gscResp, gscQueriesResp, gscDeviceResp] = await Promise.all([
+                gsc.searchanalytics.query({
+                    auth: oauth2Client,
+                    siteUrl: siteUrl,
+                    requestBody: {
+                        startDate: startStr,
+                        endDate: endStr,
+                        dimensions: ['page'],
+                        ...pageFilter,
+                    }
+                }),
+                gsc.searchanalytics.query({
+                    auth: oauth2Client,
+                    siteUrl: siteUrl,
+                    requestBody: {
+                        startDate: startStr,
+                        endDate: endStr,
+                        dimensions: ['query'],
+                        ...pageFilter,
+                        rowLimit: 10,
+                    }
+                }),
+                gsc.searchanalytics.query({
+                    auth: oauth2Client,
+                    siteUrl: siteUrl,
+                    requestBody: {
+                        startDate: startStr,
+                        endDate: endStr,
+                        dimensions: ['device'],
+                        ...pageFilter,
+                        rowLimit: 10,
+                    }
+                }),
+            ]);
 
             const row = gscResp.data.rows?.[0];
             if (row) {
+                const clicks = row.clicks || 0;
+                const impressions = row.impressions || 0;
+                const ctrRaw = row.ctr;
+                const ctrPct = ctrRaw != null && ctrRaw !== ''
+                    ? Number((Number(ctrRaw) * 100).toFixed(2))
+                    : impressions > 0 ? Number(((clicks / impressions) * 100).toFixed(2)) : 0;
                 gscResults = {
-                    clicks: row.clicks || 0,
-                    impressions: row.impressions || 0,
-                    avg_position: row.position || 0
+                    clicks,
+                    impressions,
+                    avg_position: row.position || 0,
+                    ctr: ctrPct,
                 };
             }
+
+            const qRows = gscQueriesResp.data.rows || [];
+            qRows.sort((a, b) => (b.clicks || 0) - (a.clicks || 0));
+            topQueries = qRows.slice(0, 8).map((r) => {
+                const qc = r.clicks || 0;
+                const qi = r.impressions || 0;
+                const qCtr = r.ctr != null && r.ctr !== ''
+                    ? Number((Number(r.ctr) * 100).toFixed(2))
+                    : qi > 0 ? Number(((qc / qi) * 100).toFixed(2)) : 0;
+                return {
+                    query: r.keys?.[0] || '',
+                    clicks: qc,
+                    impressions: qi,
+                    ctr: qCtr,
+                    position: r.position != null ? Number(Number(r.position).toFixed(2)) : 0,
+                };
+            });
+
+            clicksByDevice = (gscDeviceResp.data.rows || []).map((r) => ({
+                device: r.keys?.[0] || 'UNKNOWN',
+                clicks: r.clicks || 0,
+                impressions: r.impressions || 0,
+            }));
         } else {
             console.warn(`[warning] No matching GSC property found for URL: ${url}. Available properties: ${siteEntries.map(s => s.siteUrl).join(', ')}`);
         }
@@ -444,9 +522,16 @@ async function handleAnalytics(req, res, url, { gsc, ad, aa, oauth2Client }) {
       success: true,
       data: {
         pageviews,
+        totalUsers,
+        sessions,
+        engagementSeconds: Number(engagementSeconds.toFixed(1)),
+        eventCount,
         clicks: gscResults.clicks || 0,
         impressions: gscResults.impressions || 0,
-        avgPosition: gscResults.avg_position ? Number(gscResults.avg_position.toFixed(2)) : 0
+        avgPosition: gscResults.avg_position ? Number(Number(gscResults.avg_position).toFixed(2)) : 0,
+        ctr: gscResults.ctr || 0,
+        topQueries,
+        clicksByDevice,
       }
     });
 
