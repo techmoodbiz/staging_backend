@@ -195,17 +195,19 @@ async function handleCreateJob(req, res, db, userData) {
 }
 
 async function handleGetNextKeyword(req, res, db) {
-  // Find the oldest processing job with pending keywords
-  const jobSnap = await db.collection('rank_jobs')
+  // Find processing jobs
+  const jobsSnap = await db.collection('rank_jobs')
     .where('status', '==', 'processing')
-    .orderBy('created_at', 'asc')
-    .limit(1)
     .get();
 
-  if (jobSnap.empty) return res.json(null);
+  if (jobsSnap.empty) return res.json(null);
 
-  const jobDoc = jobSnap.docs[0];
-  const jobData = jobDoc.data();
+  // Sort in memory by created_at asc
+  const jobs = jobsSnap.docs.map(doc => ({ id: doc.id, ref: doc.ref, ...doc.data() }));
+  jobs.sort((a, b) => (a.createdAt || a.created_at || 0) - (b.createdAt || b.created_at || 0));
+
+  const jobDoc = jobs[0];
+  const jobData = jobDoc;
 
   if (!jobData.pending_keywords.length) {
     await jobDoc.ref.update({ status: 'completed' });
@@ -303,6 +305,9 @@ async function handleGetRankings(req, res, db, userData) {
     keywords = fallbackSnap.docs.map(doc => ({ id: doc.id, keyword: doc.data().keyword }));
   }
 
+  // For each keyword, get the latest history entry
+  const results = [];
+  for (const kw of keywords) {
     // Get history for this keyword
     let historySnap = await db.collection('rank_history')
       .where('keywordId', '==', kw.id)
@@ -350,15 +355,16 @@ async function handleGetHistory(req, res, db, userData) {
   const { keywordId, limit = 30 } = req.query;
   const historySnap = await db.collection('rank_history')
     .where('keyword_id', '==', keywordId)
-    .orderBy('checked_at', 'desc')
-    .limit(parseInt(limit))
     .get();
   
   const history = historySnap.docs.map(doc => ({
     id: doc.id,
     ...doc.data(),
-    checked_at: doc.data().checked_at?.toDate()?.toISOString()
+    checkedAt: (doc.data().checkedAt || doc.data().checked_at)?.toDate()?.toISOString()
   }));
+
+  // Sort in memory
+  history.sort((a, b) => new Date(b.checkedAt).getTime() - new Date(a.checkedAt).getTime());
   
-  res.json(history);
+  res.json(history.slice(0, parseInt(limit)));
 }
