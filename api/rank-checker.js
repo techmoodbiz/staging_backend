@@ -95,10 +95,17 @@ async function handleGetKeywords(req, res, db, userData) {
   
   // Try both snake_case and camelCase for backward compatibility during migration if needed
   // but for now we use brandId as primary
-  const snapshot = await db.collection('rank_keywords')
+  // Query using brandId (new)
+  let snapshot = await db.collection('rank_keywords')
     .where('brandId', '==', brandId)
-    .orderBy('keyword', 'asc')
     .get();
+  
+  // If no results, try brand_id (old)
+  if (snapshot.empty) {
+    snapshot = await db.collection('rank_keywords')
+      .where('brand_id', '==', brandId)
+      .get();
+  }
   
   const keywords = snapshot.docs.map(doc => {
     const data = doc.data();
@@ -109,6 +116,10 @@ async function handleGetKeywords(req, res, db, userData) {
       createdAt: data.createdAt || data.created_at
     };
   });
+
+  // Sort in memory instead of Firestore to avoid index requirement
+  keywords.sort((a, b) => (a.keyword || '').localeCompare(b.keyword || ''));
+
   res.json(keywords);
 }
 
@@ -292,27 +303,28 @@ async function handleGetRankings(req, res, db, userData) {
     keywords = fallbackSnap.docs.map(doc => ({ id: doc.id, keyword: doc.data().keyword }));
   }
 
-  // For each keyword, get the latest history entry
-  const results = [];
-  for (const kw of keywords) {
-    const historySnap = await db.collection('rank_history')
+    // Get history for this keyword
+    let historySnap = await db.collection('rank_history')
       .where('keywordId', '==', kw.id)
-      .orderBy('checkedAt', 'desc')
-      .limit(1)
       .get();
     
     // Fallback if not found in camelCase
-    let finalSnap = historySnap;
-    if (finalSnap.empty) {
-        finalSnap = await db.collection('rank_history')
-          .where('keyword_id', '==', kw.id)
-          .orderBy('checked_at', 'desc')
-          .limit(1)
-          .get();
+    if (historySnap.empty) {
+      historySnap = await db.collection('rank_history')
+        .where('keyword_id', '==', kw.id)
+        .get();
     }
     
-    if (!finalSnap.empty) {
-      const h = finalSnap.docs[0].data();
+    if (!historySnap.empty) {
+      // Sort in memory to find the latest
+      const historyDocs = historySnap.docs.map(doc => doc.data());
+      historyDocs.sort((a, b) => {
+        const timeA = (a.checkedAt || a.checked_at)?.toDate()?.getTime() || 0;
+        const timeB = (b.checkedAt || b.checked_at)?.toDate()?.getTime() || 0;
+        return timeB - timeA;
+      });
+      
+      const h = historyDocs[0];
       results.push({
         keywordId: kw.id,
         keyword: kw.keyword,
