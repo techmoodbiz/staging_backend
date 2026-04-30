@@ -245,6 +245,13 @@ async function handleSubmitResult(req, res, db) {
 
 async function handleGetJobStatus(req, res, db) {
   const { jobId } = req.query;
+  
+  if (!jobId) {
+    // Global status for extension badge
+    const processingSnap = await db.collection('rank_jobs').where('status', '==', 'processing').get();
+    return res.json({ pendingJobs: processingSnap.size });
+  }
+
   const doc = await db.collection('rank_jobs').doc(jobId).get();
   if (!doc.exists) return res.status(404).json({ error: 'Job not found' });
   
