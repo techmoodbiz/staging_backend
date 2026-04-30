@@ -93,37 +93,48 @@ async function handleGetKeywords(req, res, db, userData) {
   const { brandId } = req.query;
   if (!brandId) return res.status(400).json({ error: 'brandId required' });
   
+  // Try both snake_case and camelCase for backward compatibility during migration if needed
+  // but for now we use brandId as primary
   const snapshot = await db.collection('rank_keywords')
-    .where('brand_id', '==', brandId)
+    .where('brandId', '==', brandId)
     .orderBy('keyword', 'asc')
     .get();
   
-  const keywords = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  const keywords = snapshot.docs.map(doc => {
+    const data = doc.data();
+    return { 
+      id: doc.id, 
+      keyword: data.keyword,
+      brandId: data.brandId || data.brand_id,
+      createdAt: data.createdAt || data.created_at
+    };
+  });
   res.json(keywords);
 }
 
 async function handleManageKeywords(req, res, db, userData) {
   if (req.method !== 'POST') return res.status(405).end();
-  const { subAction, brandId, keyword, keywordId, keywords } = req.body;
+  const { action, subAction, brandId, keyword, keywordId, keywords } = req.body;
+  const effectiveAction = action || subAction;
 
-  if (subAction === 'add') {
+  if (effectiveAction === 'add') {
     const docRef = await db.collection('rank_keywords').add({
-      brand_id: brandId,
+      brandId: brandId,
       keyword: keyword.trim(),
-      created_at: admin.firestore.FieldValue.serverTimestamp()
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
     });
     return res.json({ id: docRef.id });
   } 
   
-  if (subAction === 'bulk-add') {
+  if (effectiveAction === 'bulk-add') {
     const batch = db.batch();
     const added = [];
     for (const kw of keywords) {
       const ref = db.collection('rank_keywords').doc();
       batch.set(ref, {
-        brand_id: brandId,
+        brandId: brandId,
         keyword: kw.trim(),
-        created_at: admin.firestore.FieldValue.serverTimestamp()
+        createdAt: admin.firestore.FieldValue.serverTimestamp()
       });
       added.push({ id: ref.id, keyword: kw.trim() });
     }
@@ -131,17 +142,17 @@ async function handleManageKeywords(req, res, db, userData) {
     return res.json({ added: added.length });
   }
 
-  if (subAction === 'delete') {
+  if (effectiveAction === 'delete') {
     await db.collection('rank_keywords').doc(keywordId).delete();
     // Also delete history for this keyword
-    const historySnap = await db.collection('rank_history').where('keyword_id', '==', keywordId).get();
+    const historySnap = await db.collection('rank_history').where('keywordId', '==', keywordId).get();
     const batch = db.batch();
     historySnap.docs.forEach(doc => batch.delete(doc.ref));
     await batch.commit();
     return res.json({ success: true });
   }
 
-  res.status(400).json({ error: 'Invalid subAction' });
+  res.status(400).json({ error: 'Invalid action' });
 }
 
 async function handleCreateJob(req, res, db, userData) {
@@ -229,14 +240,15 @@ async function handleSubmitResult(req, res, db) {
   // Save to history
   if (keywordId) {
     const jobSnap = await jobRef.get();
-    const brandId = jobSnap.data().brand_id;
+    const brandId = jobSnap.data().brandId || jobSnap.data().brand_id;
 
     await db.collection('rank_history').add({
-      keyword_id: keywordId,
-      brand_id: brandId,
+      keywordId: keywordId,
+      brandId: brandId,
+      keyword: keyword,
       position: position ?? null,
       url: url || null,
-      checked_at: admin.firestore.FieldValue.serverTimestamp()
+      checkedAt: admin.firestore.FieldValue.serverTimestamp()
     });
   }
 
@@ -271,26 +283,42 @@ async function handleGetRankings(req, res, db, userData) {
   const { brandId } = req.query;
   
   // Get all keywords for the brand
-  const keywordsSnap = await db.collection('rank_keywords').where('brand_id', '==', brandId).get();
-  const keywords = keywordsSnap.docs.map(doc => ({ id: doc.id, keyword: doc.data().keyword }));
+  const keywordsSnap = await db.collection('rank_keywords').where('brandId', '==', brandId).get();
+  let keywords = keywordsSnap.docs.map(doc => ({ id: doc.id, keyword: doc.data().keyword }));
+  
+  if (keywords.length === 0) {
+    // Fallback for snake_case
+    const fallbackSnap = await db.collection('rank_keywords').where('brand_id', '==', brandId).get();
+    keywords = fallbackSnap.docs.map(doc => ({ id: doc.id, keyword: doc.data().keyword }));
+  }
 
   // For each keyword, get the latest history entry
   const results = [];
   for (const kw of keywords) {
     const historySnap = await db.collection('rank_history')
-      .where('keyword_id', '==', kw.id)
-      .orderBy('checked_at', 'desc')
+      .where('keywordId', '==', kw.id)
+      .orderBy('checkedAt', 'desc')
       .limit(1)
       .get();
     
-    if (!historySnap.empty) {
-      const h = historySnap.docs[0].data();
+    // Fallback if not found in camelCase
+    let finalSnap = historySnap;
+    if (finalSnap.empty) {
+        finalSnap = await db.collection('rank_history')
+          .where('keyword_id', '==', kw.id)
+          .orderBy('checked_at', 'desc')
+          .limit(1)
+          .get();
+    }
+    
+    if (!finalSnap.empty) {
+      const h = finalSnap.docs[0].data();
       results.push({
         keywordId: kw.id,
         keyword: kw.keyword,
         position: h.position,
         url: h.url,
-        checkedAt: h.checked_at?.toDate()?.toISOString() || null
+        checkedAt: (h.checkedAt || h.checked_at)?.toDate()?.toISOString() || null
       });
     } else {
       results.push({
