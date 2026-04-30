@@ -175,7 +175,18 @@ async function handleCreateJob(req, res, db, userData) {
   const brandData = brandSnap.data();
   const domain = brandData.domain || '';
 
-  const keywordsSnap = await db.collection('rank_keywords').where('brand_id', '==', brandId).get();
+  // Query using brandId (new)
+  let keywordsSnap = await db.collection('rank_keywords')
+    .where('brandId', '==', brandId)
+    .get();
+  
+  // If no results, try brand_id (old)
+  if (keywordsSnap.empty) {
+    keywordsSnap = await db.collection('rank_keywords')
+      .where('brand_id', '==', brandId)
+      .get();
+  }
+
   if (keywordsSnap.empty) return res.json({ message: 'No keywords', jobId: null });
 
   const keywords = keywordsSnap.docs.map(doc => ({ id: doc.id, keyword: doc.data().keyword }));
