@@ -1,0 +1,317 @@
+
+let admin = null;
+let db = null;
+
+async function initClients() {
+  if (!admin) {
+    try {
+      const { default: firebaseAdmin } = await import('firebase-admin');
+      admin = firebaseAdmin;
+      
+      if (!admin.apps.length) {
+        admin.initializeApp({
+          credential: admin.credential.cert({
+            projectId: process.env.FIREBASE_PROJECT_ID,
+            clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+            privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+          }),
+        });
+      }
+      db = admin.firestore();
+    } catch (error) {
+      console.error('Safe Load Error (Rank Checker):', error);
+      throw error;
+    }
+  }
+  return { admin, db };
+}
+
+export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+  if (req.method === 'OPTIONS') return res.status(200).end();
+
+  try {
+    const { admin, db } = await initClients();
+    const { action } = req.query;
+
+    // --- AUTH VERIFICATION ---
+    // Public actions for Extension
+    const PUBLIC_ACTIONS = ['get-next-keyword', 'submit-result', 'get-job-status'];
+    
+    let userId = null;
+    let userData = null;
+
+    if (!PUBLIC_ACTIONS.includes(action)) {
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+      const token = authHeader.split('Bearer ')[1];
+      try {
+        const decodedToken = await admin.auth().verifyIdToken(token);
+        userId = decodedToken.uid;
+        const userDoc = await db.collection('users').doc(userId).get();
+        userData = userDoc.data();
+      } catch (error) {
+        return res.status(401).json({ error: 'Unauthorized: Token verification failed' });
+      }
+    }
+
+    switch (action) {
+      case 'get-keywords':
+        return handleGetKeywords(req, res, db, userData);
+      case 'manage-keywords':
+        return handleManageKeywords(req, res, db, userData);
+      case 'create-job':
+        return handleCreateJob(req, res, db, userData);
+      case 'get-rankings':
+        return handleGetRankings(req, res, db, userData);
+      case 'get-history':
+        return handleGetHistory(req, res, db, userData);
+      
+      // Extension Endpoints
+      case 'get-next-keyword':
+        return handleGetNextKeyword(req, res, db);
+      case 'submit-result':
+        return handleSubmitResult(req, res, db);
+      case 'get-job-status':
+        return handleGetJobStatus(req, res, db);
+      
+      default:
+        return res.status(400).json({ error: 'Invalid action' });
+    }
+  } catch (error) {
+    console.error('RANK CHECKER ERROR:', error);
+    return res.status(500).json({ error: error.message });
+  }
+}
+
+async function handleGetKeywords(req, res, db, userData) {
+  const { brandId } = req.query;
+  if (!brandId) return res.status(400).json({ error: 'brandId required' });
+  
+  const snapshot = await db.collection('rank_keywords')
+    .where('brand_id', '==', brandId)
+    .orderBy('keyword', 'asc')
+    .get();
+  
+  const keywords = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  res.json(keywords);
+}
+
+async function handleManageKeywords(req, res, db, userData) {
+  if (req.method !== 'POST') return res.status(405).end();
+  const { subAction, brandId, keyword, keywordId, keywords } = req.body;
+
+  if (subAction === 'add') {
+    const docRef = await db.collection('rank_keywords').add({
+      brand_id: brandId,
+      keyword: keyword.trim(),
+      created_at: admin.firestore.FieldValue.serverTimestamp()
+    });
+    return res.json({ id: docRef.id });
+  } 
+  
+  if (subAction === 'bulk-add') {
+    const batch = db.batch();
+    const added = [];
+    for (const kw of keywords) {
+      const ref = db.collection('rank_keywords').doc();
+      batch.set(ref, {
+        brand_id: brandId,
+        keyword: kw.trim(),
+        created_at: admin.firestore.FieldValue.serverTimestamp()
+      });
+      added.push({ id: ref.id, keyword: kw.trim() });
+    }
+    await batch.commit();
+    return res.json({ added: added.length });
+  }
+
+  if (subAction === 'delete') {
+    await db.collection('rank_keywords').doc(keywordId).delete();
+    // Also delete history for this keyword
+    const historySnap = await db.collection('rank_history').where('keyword_id', '==', keywordId).get();
+    const batch = db.batch();
+    historySnap.docs.forEach(doc => batch.delete(doc.ref));
+    await batch.commit();
+    return res.json({ success: true });
+  }
+
+  res.status(400).json({ error: 'Invalid subAction' });
+}
+
+async function handleCreateJob(req, res, db, userData) {
+  if (req.method !== 'POST') return res.status(405).end();
+  const { brandId } = req.body;
+
+  const brandSnap = await db.collection('brands').doc(brandId).get();
+  if (!brandSnap.exists) return res.status(404).json({ error: 'Brand not found' });
+  const brandData = brandSnap.data();
+  const domain = brandData.domain || '';
+
+  const keywordsSnap = await db.collection('rank_keywords').where('brand_id', '==', brandId).get();
+  if (keywordsSnap.empty) return res.json({ message: 'No keywords', jobId: null });
+
+  const keywords = keywordsSnap.docs.map(doc => ({ id: doc.id, keyword: doc.data().keyword }));
+  
+  const jobId = `job_${Date.now()}`;
+  await db.collection('rank_jobs').doc(jobId).set({
+    brand_id: brandId,
+    domain: domain,
+    total: keywords.length,
+    pending_keywords: keywords,
+    completed_results: [],
+    status: 'processing',
+    created_at: admin.firestore.FieldValue.serverTimestamp()
+  });
+
+  res.json({ jobId, total: keywords.length, domain });
+}
+
+async function handleGetNextKeyword(req, res, db) {
+  // Find the oldest processing job with pending keywords
+  const jobSnap = await db.collection('rank_jobs')
+    .where('status', '==', 'processing')
+    .orderBy('created_at', 'asc')
+    .limit(1)
+    .get();
+
+  if (jobSnap.empty) return res.json(null);
+
+  const jobDoc = jobSnap.docs[0];
+  const jobData = jobDoc.data();
+
+  if (!jobData.pending_keywords.length) {
+    await jobDoc.ref.update({ status: 'completed' });
+    return res.json(null);
+  }
+
+  const keywordObj = jobData.pending_keywords[0];
+  
+  // Remove from pending in the document (simulating pop)
+  await jobDoc.ref.update({
+    pending_keywords: admin.firestore.FieldValue.arrayRemove(keywordObj)
+  });
+
+  res.json({
+    jobId: jobDoc.id,
+    keywordId: keywordObj.id,
+    keyword: keywordObj.keyword,
+    domain: jobData.domain,
+    brandId: jobData.brand_id,
+    remaining: jobData.pending_keywords.length - 1,
+    total: jobData.total
+  });
+}
+
+async function handleSubmitResult(req, res, db) {
+  if (req.method !== 'POST') return res.status(405).end();
+  const { jobId, keywordId, keyword, position, url, error } = req.body;
+
+  const jobRef = db.collection('rank_jobs').doc(jobId);
+  const result = {
+    keywordId,
+    keyword,
+    position: position ?? null,
+    url: url || null,
+    error: error || null,
+    checkedAt: new Date().toISOString()
+  };
+
+  await jobRef.update({
+    completed_results: admin.firestore.FieldValue.arrayUnion(result)
+  });
+
+  // Save to history
+  if (keywordId) {
+    const jobSnap = await jobRef.get();
+    const brandId = jobSnap.data().brand_id;
+
+    await db.collection('rank_history').add({
+      keyword_id: keywordId,
+      brand_id: brandId,
+      position: position ?? null,
+      url: url || null,
+      checked_at: admin.firestore.FieldValue.serverTimestamp()
+    });
+  }
+
+  res.json({ ok: true });
+}
+
+async function handleGetJobStatus(req, res, db) {
+  const { jobId } = req.query;
+  const doc = await db.collection('rank_jobs').doc(jobId).get();
+  if (!doc.exists) return res.status(404).json({ error: 'Job not found' });
+  
+  const data = doc.data();
+  res.json({
+    jobId: doc.id,
+    domain: data.domain,
+    total: data.total,
+    pending: data.pending_keywords.length,
+    completed: data.completed_results.length,
+    done: data.status === 'completed' || (data.pending_keywords.length === 0 && data.completed_results.length >= data.total),
+    results: data.completed_results
+  });
+}
+
+async function handleGetRankings(req, res, db, userData) {
+  const { brandId } = req.query;
+  
+  // Get all keywords for the brand
+  const keywordsSnap = await db.collection('rank_keywords').where('brand_id', '==', brandId).get();
+  const keywords = keywordsSnap.docs.map(doc => ({ id: doc.id, keyword: doc.data().keyword }));
+
+  // For each keyword, get the latest history entry
+  const results = [];
+  for (const kw of keywords) {
+    const historySnap = await db.collection('rank_history')
+      .where('keyword_id', '==', kw.id)
+      .orderBy('checked_at', 'desc')
+      .limit(1)
+      .get();
+    
+    if (!historySnap.empty) {
+      const h = historySnap.docs[0].data();
+      results.push({
+        keywordId: kw.id,
+        keyword: kw.keyword,
+        position: h.position,
+        url: h.url,
+        checkedAt: h.checked_at?.toDate()?.toISOString() || null
+      });
+    } else {
+      results.push({
+        keywordId: kw.id,
+        keyword: kw.keyword,
+        position: null,
+        url: null,
+        checkedAt: null
+      });
+    }
+  }
+
+  res.json(results);
+}
+
+async function handleGetHistory(req, res, db, userData) {
+  const { keywordId, limit = 30 } = req.query;
+  const historySnap = await db.collection('rank_history')
+    .where('keyword_id', '==', keywordId)
+    .orderBy('checked_at', 'desc')
+    .limit(parseInt(limit))
+    .get();
+  
+  const history = historySnap.docs.map(doc => ({
+    id: doc.id,
+    ...doc.data(),
+    checked_at: doc.data().checked_at?.toDate()?.toISOString()
+  }));
+  
+  res.json(history);
+}
