@@ -82,7 +82,12 @@ export default async function handler(req, res) {
       // API-based check (không cần extension mở trình duyệt, không bị CAPTCHA)
       case 'check-keyword-api':
         return handleCheckKeywordWithAPI(req, res, db);
-      
+      // Google Search Console API — trả thêm clicks/impressions/CTR, không quota hàng ngày
+      case 'gsc-rankings':
+        return handleGSCRankings(req, res, db, userData);
+      case 'gsc-sync-job':
+        return handleGSCSyncJob(req, res, db, userData);
+
       default:
         return res.status(400).json({ error: 'Invalid action' });
     }
@@ -560,4 +565,193 @@ async function handleCheckKeywordWithAPI(req, res, db) {
     top5: allItems.slice(0, 5), // Debug: xem API trả về gì
     source: 'google-custom-search-api',
   });
+}
+
+// ─── Google Search Console API ────────────────────────────────────────────────
+// Trả thêm clicks/impressions/CTR, không bị quota hàng ngày như Custom Search
+// Yêu cầu: GOOGLE_SERVICE_ACCOUNT_KEY env var (JSON của service account)
+//          Service account phải được thêm vào GSC với quyền "Restricted"
+
+async function getGSCAuthClient() {
+  const { google } = await import('googleapis');
+  const keyJson = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
+  if (!keyJson) throw new Error('GOOGLE_SERVICE_ACCOUNT_KEY chưa được cấu hình');
+  const credentials = typeof keyJson === 'string' ? JSON.parse(keyJson) : keyJson;
+  const auth = new google.auth.GoogleAuth({
+    credentials,
+    scopes: ['https://www.googleapis.com/auth/webmasters.readonly'],
+  });
+  return { google, auth };
+}
+
+// GET /api/rank-checker?action=gsc-rankings&brandId=xxx&days=28
+// Lấy thứ hạng từ GSC cho tất cả keywords của brand
+async function handleGSCRankings(req, res, db, userData) {
+  const { brandId, days = '28' } = req.query;
+  if (!brandId) return res.status(400).json({ error: 'brandId required' });
+
+  const brandSnap = await db.collection('brands').doc(brandId).get();
+  if (!brandSnap.exists) return res.status(404).json({ error: 'Brand not found' });
+  const brandData = brandSnap.data();
+  const domain = brandData.domain || '';
+  if (!domain) return res.status(400).json({ error: 'Brand chưa có domain' });
+
+  // Chuẩn hoá siteUrl cho GSC (hỗ trợ cả sc-domain: lẫn https://)
+  const siteUrl = domain.startsWith('sc-domain:') ? domain : `https://${domain.replace(/^https?:\/\//, '')}`;
+
+  let google, auth;
+  try {
+    ({ google, auth } = await getGSCAuthClient());
+  } catch(e) {
+    return res.status(500).json({ error: e.message });
+  }
+
+  // Lấy danh sách keywords
+  let keywordsSnap = await db.collection('rank_keywords').where('brandId', '==', brandId).get();
+  if (keywordsSnap.empty) {
+    keywordsSnap = await db.collection('rank_keywords').where('brand_id', '==', brandId).get();
+  }
+  if (keywordsSnap.empty) return res.json([]);
+
+  const keywords = keywordsSnap.docs.map(doc => ({ id: doc.id, keyword: doc.data().keyword }));
+
+  const searchconsole = google.searchconsole({ version: 'v1', auth });
+
+  const endDate = new Date();
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - parseInt(days));
+  const fmt = d => d.toISOString().split('T')[0];
+
+  const results = [];
+  for (const kw of keywords) {
+    try {
+      const apiRes = await searchconsole.searchanalytics.query({
+        siteUrl,
+        requestBody: {
+          startDate: fmt(startDate),
+          endDate: fmt(endDate),
+          dimensions: ['query'],
+          dimensionFilterGroups: [{
+            filters: [{ dimension: 'query', operator: 'equals', expression: kw.keyword }],
+          }],
+          rowLimit: 1,
+        },
+      });
+
+      const rows = apiRes.data.rows || [];
+      if (rows.length > 0) {
+        const row = rows[0];
+        results.push({
+          keywordId: kw.id,
+          keyword: kw.keyword,
+          position: Math.round(row.position),
+          positionExact: row.position,
+          clicks: row.clicks,
+          impressions: row.impressions,
+          ctr: parseFloat((row.ctr * 100).toFixed(2)),
+          found: true,
+          period: `${fmt(startDate)} → ${fmt(endDate)}`,
+          source: 'gsc',
+        });
+      } else {
+        results.push({ keywordId: kw.id, keyword: kw.keyword, position: null, clicks: 0, impressions: 0, ctr: 0, found: false, source: 'gsc' });
+      }
+
+      // Tránh rate limit GSC API
+      await new Promise(r => setTimeout(r, 150));
+    } catch(err) {
+      results.push({ keywordId: kw.id, keyword: kw.keyword, position: null, error: err.message, found: false, source: 'gsc' });
+    }
+  }
+
+  return res.json(results);
+}
+
+// POST /api/rank-checker?action=gsc-sync-job
+// Lấy dữ liệu GSC và ghi vào rank_history (giống như extension submit kết quả)
+// Body: { brandId }
+async function handleGSCSyncJob(req, res, db, userData) {
+  if (req.method !== 'POST') return res.status(405).end();
+  const { brandId, days = 28 } = req.body;
+  if (!brandId) return res.status(400).json({ error: 'brandId required' });
+
+  const brandSnap = await db.collection('brands').doc(brandId).get();
+  if (!brandSnap.exists) return res.status(404).json({ error: 'Brand not found' });
+  const brandData = brandSnap.data();
+  const domain = brandData.domain || '';
+  const siteUrl = domain.startsWith('sc-domain:') ? domain : `https://${domain.replace(/^https?:\/\//, '')}`;
+
+  let google, auth;
+  try {
+    ({ google, auth } = await getGSCAuthClient());
+  } catch(e) {
+    return res.status(500).json({ error: e.message });
+  }
+
+  let keywordsSnap = await db.collection('rank_keywords').where('brandId', '==', brandId).get();
+  if (keywordsSnap.empty) {
+    keywordsSnap = await db.collection('rank_keywords').where('brand_id', '==', brandId).get();
+  }
+  if (keywordsSnap.empty) return res.json({ synced: 0 });
+
+  const keywords = keywordsSnap.docs.map(doc => ({ id: doc.id, keyword: doc.data().keyword }));
+  const searchconsole = google.searchconsole({ version: 'v1', auth });
+
+  const endDate = new Date();
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - days);
+  const fmt = d => d.toISOString().split('T')[0];
+
+  let synced = 0;
+  const batch = [];
+
+  for (const kw of keywords) {
+    try {
+      const apiRes = await searchconsole.searchanalytics.query({
+        siteUrl,
+        requestBody: {
+          startDate: fmt(startDate),
+          endDate: fmt(endDate),
+          dimensions: ['query'],
+          dimensionFilterGroups: [{
+            filters: [{ dimension: 'query', operator: 'equals', expression: kw.keyword }],
+          }],
+          rowLimit: 1,
+        },
+      });
+
+      const rows = apiRes.data.rows || [];
+      const row = rows[0] || null;
+      batch.push({
+        keywordId: kw.id,
+        brandId,
+        keyword: kw.keyword,
+        position: row ? Math.round(row.position) : null,
+        positionExact: row ? row.position : null,
+        clicks: row ? row.clicks : 0,
+        impressions: row ? row.impressions : 0,
+        ctr: row ? parseFloat((row.ctr * 100).toFixed(2)) : 0,
+        url: null,
+        checkedAt: admin.firestore.FieldValue.serverTimestamp(),
+        source: 'gsc',
+        period: `${fmt(startDate)} → ${fmt(endDate)}`,
+      });
+      synced++;
+
+      await new Promise(r => setTimeout(r, 150));
+    } catch(err) {
+      console.error(`[GSC Sync] "${kw.keyword}":`, err.message);
+    }
+  }
+
+  // Ghi batch vào rank_history
+  const writeBatch = db.batch();
+  for (const entry of batch) {
+    const ref = db.collection('rank_history').doc();
+    writeBatch.set(ref, entry);
+  }
+  await writeBatch.commit();
+
+  console.log(`[GSC Sync] brand=${brandId} | synced=${synced}/${keywords.length}`);
+  return res.json({ ok: true, synced, total: keywords.length, period: `${fmt(startDate)} → ${fmt(endDate)}` });
 }
