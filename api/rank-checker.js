@@ -175,6 +175,18 @@ async function handleCreateJob(req, res, db, userData) {
   const brandData = brandSnap.data();
   const domain = brandData.domain || '';
 
+  // ── Hủy tất cả job đang processing của brand này (tránh extension lấy nhầm job cũ) ──
+  const staleJobsSnap = await db.collection('rank_jobs')
+    .where('brand_id', '==', brandId)
+    .where('status', '==', 'processing')
+    .get();
+  if (!staleJobsSnap.empty) {
+    const batch = db.batch();
+    staleJobsSnap.docs.forEach(doc => batch.update(doc.ref, { status: 'cancelled' }));
+    await batch.commit();
+    console.log(`[CreateJob] Cancelled ${staleJobsSnap.size} stale job(s) for brand ${brandId}`);
+  }
+
   // Query using brandId (new)
   let keywordsSnap = await db.collection('rank_keywords')
     .where('brandId', '==', brandId)
