@@ -2,6 +2,11 @@ import * as cheerio from "cheerio";
 import fetch from "node-fetch";
 import busboy from 'busboy';
 import mammoth from 'mammoth';
+import https from 'https';
+
+const httpsAgent = new https.Agent({
+    rejectUnauthorized: false,
+});
 
 let admin = null;
 let db = null;
@@ -89,7 +94,9 @@ async function handleAnalyzeWebsite(req, res, uid) {
     if (!websiteUrl) return res.status(400).json({ error: "Website URL is required" });
 
     const response = await fetch(websiteUrl, {
-        headers: { "User-Agent": "Mozilla/5.0..." }
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" },
+        agent: httpsAgent,
+        timeout: 15000
     });
     if (!response.ok) return res.status(400).json({ error: `Website blocked bot (${response.status})` });
 
