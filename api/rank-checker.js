@@ -530,11 +530,11 @@ async function handleCheckKeywordWithAPI(req, res, db) {
     console.warn('[RankAPI] Đảm bảo CSE được cấu hình "Search the entire web"');
   }
 
-  // Lưu kết quả vào Firestore nếu có jobId
-  if (jobId && keywordId) {
+  // Chỉ lưu khi tìm thấy vị trí — nếu null thì browser scraping sẽ submit sau
+  if (jobId && keywordId && position !== null) {
     const result = {
       keywordId, keyword,
-      position: position ?? null,
+      position,
       url: resultUrl || null,
       checkedAt: new Date().toISOString(),
     };
@@ -544,11 +544,10 @@ async function handleCheckKeywordWithAPI(req, res, db) {
       completed_results: admin.firestore.FieldValue.arrayUnion(result)
     });
 
-    // Lưu vào lịch sử
     await db.collection('rank_history').add({
       keywordId,
       keyword,
-      position: position ?? null,
+      position,
       url: resultUrl || null,
       checkedAt: admin.firestore.FieldValue.serverTimestamp()
     });
