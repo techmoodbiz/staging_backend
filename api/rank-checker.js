@@ -504,13 +504,14 @@ async function handleCheckKeywordWithAPI(req, res, db) {
     }
   }
 
-  // Tìm vị trí của domain mục tiêu
+  // Tìm vị trí của domain mục tiêu (hỗ trợ cả subdomain)
   const targetClean = normDomain(domain);
   let position = null;
   let resultUrl = null;
 
   for (const item of allItems) {
-    if (normDomain(item.url) === targetClean) {
+    const d = normDomain(item.url);
+    if (d === targetClean || d.endsWith('.' + targetClean) || targetClean.endsWith('.' + d)) {
       position = item.position;
       resultUrl = item.url;
       break;
