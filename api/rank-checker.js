@@ -79,6 +79,9 @@ export default async function handler(req, res) {
         return handleSubmitResult(req, res, db);
       case 'get-job-status':
         return handleGetJobStatus(req, res, db);
+      // API-based check (không cần extension mở trình duyệt, không bị CAPTCHA)
+      case 'check-keyword-api':
+        return handleCheckKeywordWithAPI(req, res, db);
       
       default:
         return res.status(400).json({ error: 'Invalid action' });
@@ -420,4 +423,128 @@ async function handleGetHistory(req, res, db, userData) {
   history.sort((a, b) => new Date(b.checkedAt).getTime() - new Date(a.checkedAt).getTime());
   
   res.json(history.slice(0, parseInt(limit)));
+}
+
+// ─── Google Custom Search API — Không CAPTCHA ─────────────────────────────────
+// Thay thế hoàn toàn việc extension mở browser để scrape Google
+async function handleCheckKeywordWithAPI(req, res, db) {
+  if (req.method !== 'POST') return res.status(405).end();
+  
+  const { jobId, keywordId, keyword, domain } = req.body;
+  const apiKey = process.env.GOOGLE_API_KEY;
+  const cx = process.env.GOOGLE_CX;
+
+  if (!apiKey || !cx) {
+    return res.status(500).json({ error: 'GOOGLE_API_KEY hoặc GOOGLE_CX chưa được cấu hình trong .env' });
+  }
+  if (!keyword || !domain) {
+    return res.status(400).json({ error: 'keyword và domain là bắt buộc' });
+  }
+
+  // Helper: chuẩn hóa domain để so sánh
+  const normDomain = (input) => {
+    try {
+      let s = input.trim();
+      if (!s.startsWith('http')) s = 'https://' + s;
+      return new URL(s).hostname.replace(/^www\./, '').toLowerCase();
+    } catch (_) {
+      return input.replace(/^www\./, '').toLowerCase().split('/')[0].trim();
+    }
+  };
+
+  const allItems = [];
+  const MAX_PAGES = 3; // Top 30 — tương ứng 3 API calls × 10 results
+
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const start = page * 10 + 1; // 1, 11, 21
+    try {
+      const params = new URLSearchParams({
+        key: apiKey,
+        cx: cx,
+        q: keyword,
+        num: '10',
+        start: String(start),
+        hl: 'vi',
+        gl: 'vn',
+      });
+
+      const apiRes = await fetch(`https://www.googleapis.com/customsearch/v1?${params}`);
+      const data = await apiRes.json();
+
+      if (data.error) {
+        // Quota hết
+        if (data.error.code === 429 || data.error.status === 'RESOURCE_EXHAUSTED') {
+          console.warn('[RankAPI] Hết quota Google Custom Search API hôm nay (100 queries/day)');
+          break;
+        }
+        console.error('[RankAPI] API error:', data.error.message);
+        break;
+      }
+
+      const items = data.items || [];
+      items.forEach((item, i) => {
+        allItems.push({
+          position: start + i,
+          url: item.link,
+          title: item.title,
+        });
+      });
+
+      // Ít hơn 10 kết quả = không có trang tiếp theo
+      if (items.length < 10) break;
+
+    } catch (err) {
+      console.error(`[RankAPI] Lỗi page ${page + 1}:`, err.message);
+      break;
+    }
+  }
+
+  // Tìm vị trí của domain mục tiêu
+  const targetClean = normDomain(domain);
+  let position = null;
+  let resultUrl = null;
+
+  for (const item of allItems) {
+    if (normDomain(item.url) === targetClean) {
+      position = item.position;
+      resultUrl = item.url;
+      break;
+    }
+  }
+
+  console.log(`[RankAPI] "${keyword}" → domain: ${targetClean} → #${position || 'N/A'} (${allItems.length} results scanned)`);
+
+  // Lưu kết quả vào Firestore nếu có jobId
+  if (jobId && keywordId) {
+    const result = {
+      keywordId, keyword,
+      position: position ?? null,
+      url: resultUrl || null,
+      checkedAt: new Date().toISOString(),
+    };
+
+    const jobRef = db.collection('rank_jobs').doc(jobId);
+    await jobRef.update({
+      completed_results: admin.firestore.FieldValue.arrayUnion(result)
+    });
+
+    // Lưu vào lịch sử
+    await db.collection('rank_history').add({
+      keywordId,
+      keyword,
+      position: position ?? null,
+      url: resultUrl || null,
+      checkedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+  }
+
+  return res.json({
+    ok: true,
+    keyword,
+    domain,
+    position,
+    url: resultUrl,
+    totalScanned: allItems.length,
+    source: 'google-custom-search-api',
+  });
 }
