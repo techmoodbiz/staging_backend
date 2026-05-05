@@ -512,7 +512,18 @@ async function handleCheckKeywordWithAPI(req, res, db) {
     }
   }
 
-  console.log(`[RankAPI] "${keyword}" → domain: ${targetClean} → #${position || 'N/A'} (${allItems.length} results scanned)`);
+  // Debug: log top 5 URLs để kiểm tra CSE có trả đúng kết quả không
+  console.log(`[RankAPI] "${keyword}" | target: "${targetClean}" | position: #${position || 'N/A'} | total: ${allItems.length}`);
+  if (allItems.length > 0) {
+    console.log('[RankAPI] Top 5 URLs returned:');
+    allItems.slice(0, 5).forEach((item, i) => {
+      const d = normDomain(item.url);
+      console.log(`  ${item.position}. ${d} — ${item.url.substring(0, 80)} ${d === targetClean ? '✅ MATCH' : ''}`);
+    });
+  } else {
+    console.warn('[RankAPI] ⚠️ API trả về 0 kết quả — Kiểm tra Google CSE config tại: https://cse.google.com');
+    console.warn('[RankAPI] Đảm bảo CSE được cấu hình "Search the entire web"');
+  }
 
   // Lưu kết quả vào Firestore nếu có jobId
   if (jobId && keywordId) {
@@ -542,9 +553,11 @@ async function handleCheckKeywordWithAPI(req, res, db) {
     ok: true,
     keyword,
     domain,
+    targetDomainNormalized: targetClean,
     position,
     url: resultUrl,
     totalScanned: allItems.length,
+    top5: allItems.slice(0, 5), // Debug: xem API trả về gì
     source: 'google-custom-search-api',
   });
 }
