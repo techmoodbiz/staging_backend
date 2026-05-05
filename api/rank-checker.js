@@ -39,7 +39,7 @@ export default async function handler(req, res) {
 
     // --- AUTH VERIFICATION ---
     // Public actions for Extension
-    const PUBLIC_ACTIONS = ['get-next-keyword', 'submit-result', 'get-job-status'];
+    const PUBLIC_ACTIONS = ['get-next-keyword', 'submit-result', 'get-job-status', 'check-keyword-gsc'];
     
     let userId = null;
     let userData = null;
@@ -87,6 +87,9 @@ export default async function handler(req, res) {
         return handleGSCRankings(req, res, db, userData);
       case 'gsc-sync-job':
         return handleGSCSyncJob(req, res, db, userData);
+      // Check 1 keyword qua GSC (dùng khi CSE không tìm thấy, thay cho browser scraping)
+      case 'check-keyword-gsc':
+        return handleCheckKeywordGSC(req, res, db);
 
       default:
         return res.status(400).json({ error: 'Invalid action' });
@@ -754,4 +757,94 @@ async function handleGSCSyncJob(req, res, db, userData) {
 
   console.log(`[GSC Sync] brand=${brandId} | synced=${synced}/${keywords.length}`);
   return res.json({ ok: true, synced, total: keywords.length, period: `${fmt(startDate)} → ${fmt(endDate)}` });
+}
+
+// ─── Check 1 keyword qua GSC (thay browser scraping khi CSE không thấy top 30) ─
+// POST /api/rank-checker?action=check-keyword-gsc
+// Body: { jobId, keywordId, keyword, domain }
+async function handleCheckKeywordGSC(req, res, db) {
+  if (req.method !== 'POST') return res.status(405).end();
+  const { jobId, keywordId, keyword, domain } = req.body;
+  if (!keyword || !domain) return res.status(400).json({ error: 'keyword và domain là bắt buộc' });
+
+  // Lấy siteUrl từ brand domain
+  const normDomain = (d) => {
+    try {
+      let s = d.trim();
+      if (!s.startsWith('http')) s = 'https://' + s;
+      return new URL(s).hostname.replace(/^www\./, '').toLowerCase();
+    } catch (_) { return d.replace(/^www\./, '').toLowerCase().split('/')[0].trim(); }
+  };
+  const cleanDomain = normDomain(domain);
+  const siteUrl = `https://${cleanDomain}`;
+
+  let google, auth;
+  try {
+    ({ google, auth } = await getGSCAuthClient());
+  } catch(e) {
+    return res.json({ ok: false, position: null, error: e.message });
+  }
+
+  const DAYS = 28;
+  const endDate = new Date();
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - DAYS);
+  const fmt = d => d.toISOString().split('T')[0];
+
+  try {
+    const searchconsole = google.searchconsole({ version: 'v1', auth });
+    const apiRes = await searchconsole.searchanalytics.query({
+      siteUrl,
+      requestBody: {
+        startDate: fmt(startDate),
+        endDate: fmt(endDate),
+        dimensions: ['query'],
+        dimensionFilterGroups: [{
+          filters: [{ dimension: 'query', operator: 'equals', expression: keyword }],
+        }],
+        rowLimit: 1,
+      },
+    });
+
+    const rows = apiRes.data.rows || [];
+    if (rows.length === 0) {
+      console.log(`[GSC KW] "${keyword}" → không có dữ liệu GSC`);
+      return res.json({ ok: true, position: null, clicks: 0, impressions: 0, days: DAYS, source: 'gsc' });
+    }
+
+    const row = rows[0];
+    const position = Math.round(row.position);
+    console.log(`[GSC KW] "${keyword}" → #${position} (avg ${row.position.toFixed(1)}) | clicks:${row.clicks} impr:${row.impressions}`);
+
+    // Lưu vào rank_history nếu có jobId
+    if (jobId && keywordId) {
+      await db.collection('rank_history').add({
+        keywordId,
+        keyword,
+        position,
+        positionExact: row.position,
+        clicks: row.clicks,
+        impressions: row.impressions,
+        ctr: parseFloat((row.ctr * 100).toFixed(2)),
+        url: null,
+        checkedAt: admin.firestore.FieldValue.serverTimestamp(),
+        source: 'gsc',
+        period: `${fmt(startDate)} → ${fmt(endDate)}`,
+      });
+    }
+
+    return res.json({
+      ok: true,
+      position,
+      positionExact: row.position,
+      clicks: row.clicks,
+      impressions: row.impressions,
+      ctr: parseFloat((row.ctr * 100).toFixed(2)),
+      days: DAYS,
+      source: 'gsc',
+    });
+  } catch(err) {
+    console.error(`[GSC KW] "${keyword}" error:`, err.message);
+    return res.json({ ok: false, position: null, error: err.message });
+  }
 }
