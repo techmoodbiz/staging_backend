@@ -206,7 +206,37 @@ async function handleCreateJob(req, res, db, userData) {
 }
 
 async function handleGetNextKeyword(req, res, db) {
-  // Find processing jobs
+  const { jobId: specificJobId } = req.query;
+
+  // Nếu có jobId cụ thể, lấy job đó trước
+  if (specificJobId) {
+    const jobDoc = await db.collection('rank_jobs').doc(specificJobId).get();
+    if (jobDoc.exists) {
+      const jobData = jobDoc.data();
+      if (jobData.status === 'processing' && jobData.pending_keywords?.length > 0) {
+        const keywordObj = jobData.pending_keywords[0];
+        await jobDoc.ref.update({
+          pending_keywords: admin.firestore.FieldValue.arrayRemove(keywordObj)
+        });
+        return res.json({
+          jobId: jobDoc.id,
+          keywordId: keywordObj.id,
+          keyword: keywordObj.keyword,
+          domain: jobData.domain,
+          brandId: jobData.brand_id,
+          remaining: jobData.pending_keywords.length - 1,
+          total: jobData.total
+        });
+      }
+      // Job hết pending_keywords → đánh dấu completed
+      if (jobData.pending_keywords?.length === 0) {
+        await jobDoc.ref.update({ status: 'completed' });
+      }
+      return res.json(null);
+    }
+  }
+
+  // Fallback: tìm job processing bất kỳ
   const jobsSnap = await db.collection('rank_jobs')
     .where('status', '==', 'processing')
     .get();
@@ -220,7 +250,7 @@ async function handleGetNextKeyword(req, res, db) {
   const jobDoc = jobs[0];
   const jobData = jobDoc;
 
-  if (!jobData.pending_keywords.length) {
+  if (!jobData.pending_keywords?.length) {
     await jobDoc.ref.update({ status: 'completed' });
     return res.json(null);
   }
